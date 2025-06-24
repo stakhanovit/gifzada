@@ -969,18 +969,18 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         const attachment = new AttachmentBuilder(gifBuffer, { name: `youtube_${Date.now()}.gif` });
 
         const resultEmbed = new EmbedBuilder()
-          .setTitle('✅ **YOUTUBE → GIF CONCLUÍDO!**')
+          .setTitle(' **YOUTUBE → GIF CONCLUÍDO!**')
           .setDescription(`
 📺 Seu vídeo do YouTube foi convertido com sucesso!
 
 \`\`\`yaml
-📁 Origem: YouTube
-🎞️ Formato: GIF Animado
-⏳ Duração: ${duration}s
-💾 Tamanho: ${(gifBuffer.length / 1024 / 1024).toFixed(2)} MB
+ Origem: YouTube
+🎞 Formato: GIF Animado
+ Duração: ${duration}s
+ Tamanho: ${(gifBuffer.length / 1024 / 1024).toFixed(2)} MB
 \`\`\`
 
-> ✨ *Qualidade preservada!*
+>  *Qualidade preservada!*
 `)
           .setColor('#00ff88')
           .setTimestamp();
@@ -1012,7 +1012,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       conversaoEscolha.set(interaction.channel.id, { type: 'resize-gif', percentage: percentageNum });
 
       const embed = new EmbedBuilder()
-        .setTitle('✅ **OPÇÃO SELECIONADA**')
+        .setTitle(' **OPÇÃO SELECIONADA**')
         .setDescription(`**Redimensionar GIF** selecionado!\n> **Otimização:** ${percentageNum}% de redução\n> Envie seu arquivo GIF para otimização`)
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
@@ -1034,12 +1034,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         .setTitle('📱 **BAIXANDO VÍDEO DO TIKTOK**')
         .setDescription(`
 \`\`\`yaml
-📱 URL: ${tiktokUrl}
-⏳ Status: Processando...
-🔄 Aguarde: Baixando vídeo...
+ URL: ${tiktokUrl}
+ Status: Processando...
+ Aguarde: Baixando vídeo...
 \`\`\`
 
-> 🚀 *Aguarde enquanto baixamos seu vídeo do TikTok!*
+>  *Aguarde enquanto baixamos seu vídeo do TikTok!*
 `)
         .setColor('#fe2c55')
         .setTimestamp();
@@ -1053,19 +1053,19 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         const fileSize = (result.buffer.length / 1024 / 1024).toFixed(2);
 
         const resultEmbed = new EmbedBuilder()
-          .setTitle('✅ **TIKTOK BAIXADO COM SUCESSO!**')
+          .setTitle(' **TIKTOK BAIXADO COM SUCESSO!**')
           .setDescription(`
 📱 Seu vídeo do TikTok foi baixado com sucesso!
 
 \`\`\`yaml
-📁 Arquivo: ${result.name}
-💾 Tamanho: ${fileSize} MB
-🎬 Formato: MP4
-📱 Plataforma: TikTok
-⚡ Qualidade: HD
+ Arquivo: ${result.name}
+ Tamanho: ${fileSize} MB
+ Formato: MP4
+ Plataforma: TikTok
+ Qualidade: HD
 \`\`\`
 
-> 📥 *Download concluído com sucesso!*
+>  *Download concluído com sucesso!*
 `)
           .setColor('#00ff88')
           .setFooter({ text: `Baixado para ${interaction.user.username}` })
@@ -1083,12 +1083,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
           .setTitle('❌ **ERRO NO DOWNLOAD**')
           .setDescription(`
 \`\`\`yaml
-❌ Falha no download
-📱 URL: ${tiktokUrl}
-🔍 Erro: ${error.message || 'Erro desconhecido'}
+ Falha no download
+ URL: ${tiktokUrl}
+ Erro: ${error.message || 'Erro desconhecido'}
 \`\`\`
 
-> 💡 *Verifique se o link está correto e tente novamente*
+>  *Verifique se o link está correto e tente novamente*
 `)
           .setColor('#ff4444')
           .setTimestamp();
@@ -1132,12 +1132,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         const attachment = new AttachmentBuilder(videoBuffer, { name: videoName });
 
         const resultEmbed = new EmbedBuilder()
-          .setTitle('✅ Vídeo Baixado com Sucesso!')
+          .setTitle(' Vídeo Baixado com Sucesso!')
           .setColor('#00ff00')
           .addFields(
-            { name: '📁 Tamanho', value: `${fileSize} MB`, inline: true },
-            { name: '📱 Plataforma', value: tiktokUrl ? 'TikTok' : 'Instagram', inline: true },
-            { name: '🎬 Formato', value: 'MP4', inline: true }
+            { name: ' Tamanho', value: `${fileSize} MB`, inline: true },
+            { name: ' Plataforma', value: tiktokUrl ? 'TikTok' : 'Instagram', inline: true },
+            { name: ' Formato', value: 'MP4', inline: true }
           )
           .setFooter({ text: `Baixado para ${interaction.user.username}` })
           .setTimestamp();
@@ -2153,61 +2153,61 @@ client.on('messageCreate', async message => {
 
     // Criar embed com informações detalhadas
     const resultEmbed = new EmbedBuilder()
-      .setTitle('✅ **CONVERSÃO CONCLUÍDA COM SUCESSO!**')
+      .setTitle(' **CONVERSÃO CONCLUÍDA COM SUCESSO!**')
       .setDescription(`
 ╭──────────────────────────────────────╮
 │   **ARQUIVO OTIMIZADO COM SUCESSO**  │
 ╰──────────────────────────────────────╯
 
-> 🌟 *Seu arquivo foi processado com nossa tecnologia!*
+>  *Seu arquivo foi processado com nossa tecnologia!*
 
-## 📊 **ESTATÍSTICAS DA CONVERSÃO:**
+##  **ESTATÍSTICAS DA CONVERSÃO:**
 
 \`\`\`yaml
-📁 Arquivo Original: ${file.name}
-🎯 Arquivo Final: ${name}
-🔄 Tipo de Conversão: ${tipo.toUpperCase()}
-⏰ Tempo de Processamento: ${(processingTime / 1000).toFixed(1)}s
-💾 Economia de Espaço: ${compression > 0 ? compression + '% menor' : 'Otimizado'}
+ Arquivo Original: ${file.name}
+ Arquivo Final: ${name}
+ Tipo de Conversão: ${tipo.toUpperCase()}
+ Tempo de Processamento: ${(processingTime / 1000).toFixed(1)}s
+ Economia de Espaço: ${compression > 0 ? compression + '% menor' : 'Otimizado'}
 \`\`\`
 
-## 🛠️ **CARACTERÍSTICAS TÉCNICAS:**
+##  **CARACTERÍSTICAS TÉCNICAS:**
 `)
       .setColor('#00ff88')
       .addFields(
         { 
-          name: '💾 **Tamanho Final**', 
-          value: `\`${fileSize} MB\`\n*${compression > 0 ? '🔽 ' + compression + '% reduzido' : '✅ Otimizado'}*`, 
+          name: ' **Tamanho Final**', 
+          value: `\`${fileSize} MB\`\n*${compression > 0 ? '🔽 ' + compression + '% reduzido' : ' Otimizado'}*`, 
           inline: true 
         },
         { 
-          name: '🎨 **Qualidade**', 
-          value: `\`HD\`\n*⚡ Otimização*`, 
+          name: ' **Qualidade**', 
+          value: `\`HD\`\n* Otimização*`, 
           inline: true 
         },
         { 
-          name: '⚡ **Velocidade**', 
-          value: `\`${(processingTime / 1000).toFixed(1)}s\`\n*🚀 Processamento rápido*`, 
+          name: ' **Velocidade**', 
+          value: `\`${(processingTime / 1000).toFixed(1)}s\`\n* Processamento rápido*`, 
           inline: true 
         },
         { 
-          name: '🎬 **FPS/Taxa**', 
-          value: tipo === 'video-to-gif' ? `\`30 FPS\`\n*🎞️ Fluidez perfeita*` : `\`Nativo\`\n*📄 Preservado*`, 
+          name: ' **FPS/Taxa**', 
+          value: tipo === 'video-to-gif' ? `\`30 FPS\`\n*Fluidez perfeita*` : `\`Nativo\`\n* Preservado*`, 
           inline: true 
         },
         { 
-          name: '📐 **Resolução**', 
-          value: tipo === 'crop-image' ? `\`1:1 Square\`\n*✂️ Crop inteligente*` : `\`Otimizada\`\n*🔧 Auto-ajuste*`, 
+          name: ' **Resolução**', 
+          value: tipo === 'crop-image' ? `\`1:1 Square\`\n* Crop inteligente*` : `\`Otimizada\`\n* Auto-ajuste*`, 
           inline: true 
         },
         { 
-          name: '📋 **Formato**', 
-          value: `\`${name.split('.').pop().toUpperCase()}\`\n*✅ Compatível*`, 
+          name: ' **Formato**', 
+          value: `\`${name.split('.').pop().toUpperCase()}\`\n* Compatível*`, 
           inline: true 
         }
       )
       .setFooter({ 
-        text: `🎯 Conversão realizada para ${message.author.username} • GIFZADA CONVERSOR`,
+        text: ` Conversão realizada para ${message.author.username} • GIFZADA CONVERSOR`,
         iconURL: message.author.displayAvatarURL({ dynamic: true, size: 64 })
       })
       .setTimestamp();
@@ -2237,15 +2237,15 @@ client.on('messageCreate', async message => {
   } catch (err) {
     console.error(err);
     const errorEmbed = new EmbedBuilder()
-      .setTitle('❌ **ERRO NA CONVERSÃO**')
+      .setTitle(' **ERRO NA CONVERSÃO**')
       .setDescription(`
 \`\`\`yaml
-❌ Falha no processamento
-📁 Arquivo: ${file.name}
-🔍 Erro: ${err.message || 'Erro desconhecido'}
+ Falha no processamento
+ Arquivo: ${file.name}
+ Erro: ${err.message || 'Erro desconhecido'}
 \`\`\`
 
-> 💡 *Tente novamente ou contate o suporte*
+>  *Tente novamente ou contate o suporte*
 `)
       .setColor('#ff4444')
       .setTimestamp();
