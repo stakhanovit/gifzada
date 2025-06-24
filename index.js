@@ -310,7 +310,7 @@ client.on('messageCreate', async message => {
       .setTitle('<:d_emoji_278:1366581300500365343> ┊GIFZADA - SUPORTE')
       .setDescription(`
 
-<:d_membro:1366581862004166656> | Está tendo algum problema no servidor? Contate-nos! Utilize o suporte para tirar dúvidas ou denunciar membros.
+> <:d_membro:1366581862004166656> | **Está tendo algum problema no servidor? Contate-nos! Utilize o suporte para tirar dúvidas ou denunciar membros.**
 
 <:d_dot43:1366581992413728830> **AJUDA:**
 1. Esclareça dúvidas sobre o servidor.
