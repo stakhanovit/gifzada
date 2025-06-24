@@ -23,7 +23,19 @@ const gifsicle = require('gifsicle');
 const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
+const express = require('express');
 require('dotenv').config();
+
+// Criar servidor HTTP
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Bot está vivo!');
+});
+
+app.listen(3000, '0.0.0.0', () => {
+  console.log('Servidor web rodando na porta 3000');
+});
 
 const client = new Client({
   intents: [
@@ -291,6 +303,41 @@ client.on('messageCreate', async message => {
     );
 
     await message.channel.send({ embeds: [recruitmentEmbed], components: [recruitmentRow] });
+  }
+
+  if (message.content === '!suporte') {
+    const embed = new EmbedBuilder()
+      .setTitle('<:d_emoji_278:1366581300500365343> ┊GIFZADA - SUPORTE')
+      .setDescription(`
+
+<:d_membro:1366581862004166656> | Está tendo algum problema no servidor? Contate-nos! Utilize o suporte para tirar dúvidas ou denunciar membros.
+
+<:d_dot43:1366581992413728830> **AJUDA:**
+1. Esclareça dúvidas sobre o servidor.
+2. Relate problemas gerais do servidor.
+3. Converse com nossa equipe para questões sobre pedidos e fale com nossos makers.
+
+<:d_dot43:1366581992413728830> **DENÚNCIAS:**
+1. Denuncie membros que violaram nossas regras!
+2. Divulgação inadequada via DM.
+3. Problemas com nossos staffs
+`)
+      .setColor('#9c41ff')
+      .setThumbnail(message.guild.iconURL({ dynamic: true, size: 512 }))
+      .setImage('https://cdn.discordapp.com/attachments/1269195059253870634/1279897590531620977/316_Sem_Titulo_20240805003410.png?ex=685bb044&is=685a5ec4&hm=2792dcadd8898a0a56fecb4b9fdad749500f1cd5c32c8b515f05387902c2cd30&');
+
+    const suporteRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('receba_ajuda')
+        .setLabel('Receba Ajuda')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('denunciar_alguem')
+        .setLabel('Denunciar Alguém')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await message.channel.send({ embeds: [embed], components: [suporteRow] });
   }
 
   if (message.content === '!converter') {
@@ -689,6 +736,134 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       await interaction.reply({ 
         content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
+        ephemeral: true 
+      });
+    }
+
+    // Handler para modal de Ajuda
+    if (interaction.customId === 'ajuda_modal') {
+      const assunto = interaction.fields.getTextInputValue('assunto');
+      const descricao = interaction.fields.getTextInputValue('descricao');
+
+      const starterMessage = await interaction.channel.send({
+        content: '‎',
+        allowedMentions: { users: [] }
+      });
+
+      const thread = await starterMessage.startThread({
+        name: `🆘・ ${interaction.user.id}`,
+        autoArchiveDuration: 1440,
+        reason: 'Ticket de Ajuda'
+      });
+
+      starterMessage.delete().catch(() => {});
+
+      const ajudaEmbed = new EmbedBuilder()
+        .setTitle('<:d_emoji_278:1366581300500365343>┊GIFZADA - AJUDA')
+        .setDescription(`
+<:d_emoji_273:1366581300500365343> | Ficamos felizes que você escolheu sanar sua dúvida conosco, sinta-se a vontade para conversar sobre.
+
+1. Esclareça dúvidas sobre o servidor.
+2. Relate problemas gerais do servidor.
+3. Fale conosco sobre pedidos feitos por você.
+
+**Ticket aberto por:** ${interaction.user}
+**Motivo:** \`Solicitar ajuda.\`
+**Assunto:** ${assunto}
+**Descrição:** ${descricao}
+
+Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
+`)
+        .setColor('#9c41ff')
+        .setFooter({ text: 'Obrigada por entrar em contato conosco!' });
+
+      const ajudaButtonsRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('assumir_ticket_ajuda')
+          .setLabel('Assumir')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('chame_staff_ajuda')
+          .setLabel('Chame um Staff')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('fechar_ticket_ajuda')
+          .setLabel('Fechar Ticket')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await thread.send({ 
+        content: `${interaction.user} <@&1165308513355046973>`, 
+        embeds: [ajudaEmbed], 
+        components: [ajudaButtonsRow] 
+      });
+
+      await interaction.reply({ 
+        content: `**Seu ticket de suporte foi aberto com sucesso!** ${thread}`, 
+        ephemeral: true 
+      });
+    }
+
+    // Handler para modal de Denúncia
+    if (interaction.customId === 'denuncia_modal') {
+      const assunto = interaction.fields.getTextInputValue('assunto');
+      const descricao = interaction.fields.getTextInputValue('descricao');
+
+      const starterMessage = await interaction.channel.send({
+        content: '‎',
+        allowedMentions: { users: [] }
+      });
+
+      const thread = await starterMessage.startThread({
+        name: `⚠️・ ${interaction.user.id}`,
+        autoArchiveDuration: 1440,
+        reason: 'Ticket de Denúncia'
+      });
+
+      starterMessage.delete().catch(() => {});
+
+      const denunciaEmbed = new EmbedBuilder()
+        .setTitle('<:d_emoji_278:1366581300500365343>┊GIFZADA - DENÚNCIA')
+        .setDescription(`
+<:d_tag:1366581862004166656> | Ficamos felizes que você escolheu denunciar conosco, sinta-se a vontade para conversar sobre.
+
+Denuncie membros que violaram nossas regras!
+Divulgação inadequada via DM.
+Problemas com nossos staffs
+
+**Ticket aberto por:** ${interaction.user}
+**Motivo:** \`Denunciar membro.\`
+**Assunto:** ${assunto}
+**Descrição:** ${descricao}
+
+Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
+`)
+        .setColor('#9c41ff')
+        .setFooter({ text: 'Obrigada por nos ajudar a manter o servidor seguro!' });
+
+      const denunciaButtonsRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('assumir_ticket_denuncia')
+          .setLabel('Assumir Ticket')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('chame_staff_denuncia')
+          .setLabel('Chame um Staff')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('fechar_ticket_denuncia')
+          .setLabel('Fechar Ticket')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await thread.send({ 
+        content: `${interaction.user} <@&1165308513355046973>`, 
+        embeds: [denunciaEmbed], 
+        components: [denunciaButtonsRow] 
+      });
+
+      await interaction.reply({ 
+        content: `**Seu ticket de denúncia foi aberto com sucesso!** ${thread}`, 
         ephemeral: true 
       });
     }
@@ -1213,6 +1388,57 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     return;
   }
 
+  // Handlers para botões de suporte
+  if (customId === 'receba_ajuda') {
+    const modal = new ModalBuilder()
+      .setCustomId('ajuda_modal')
+      .setTitle('Receba Ajuda - GIFZADA');
+
+    const assuntoInput = new TextInputBuilder()
+      .setCustomId('assunto')
+      .setLabel('Assunto')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const descricaoInput = new TextInputBuilder()
+      .setCustomId('descricao')
+      .setLabel('Descrição')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(assuntoInput);
+    const row2 = new ActionRowBuilder().addComponents(descricaoInput);
+
+    modal.addComponents(row1, row2);
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (customId === 'denunciar_alguem') {
+    const modal = new ModalBuilder()
+      .setCustomId('denuncia_modal')
+      .setTitle('Denunciar Alguém - GIFZADA');
+
+    const assuntoInput = new TextInputBuilder()
+      .setCustomId('assunto')
+      .setLabel('Assunto')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const descricaoInput = new TextInputBuilder()
+      .setCustomId('descricao')
+      .setLabel('Descrição')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(assuntoInput);
+    const row2 = new ActionRowBuilder().addComponents(descricaoInput);
+
+    modal.addComponents(row1, row2);
+    await interaction.showModal(modal);
+    return;
+  }
+
   // Handlers para botões de recrutamento
   if (customId === 'seja_maker') {
     const modal = new ModalBuilder()
@@ -1336,7 +1562,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
   const staffRoleId = '1094385139976507523';
 
   // Botões de assumir ticket
-  if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao'].includes(customId)) {
+  if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao', 'assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(customId)) {
     const hasRecruitmentRole = interaction.member.roles.cache.has(recruitmentRoleId);
 
     if (!hasRecruitmentRole) {
@@ -1355,7 +1581,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
           .setLabel(button.label)
           .setStyle(button.style);
 
-        if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao'].includes(button.customId)) {
+        if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao', 'assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(button.customId)) {
           newButton.setDisabled(true);
         }
 
@@ -1384,7 +1610,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
   }
 
   // Botões de chamar staff (com cooldown)
-  if (['chame_staff_maker', 'chame_staff_postador', 'chame_staff_migracao'].includes(customId)) {
+  if (['chame_staff_maker', 'chame_staff_postador', 'chame_staff_migracao', 'chame_staff_ajuda', 'chame_staff_denuncia'].includes(customId)) {
     const channelId = interaction.channel.id;
     const now = Date.now();
     const cooldownTime = 5 * 60 * 1000; // 5 minutos em millisegundos
@@ -1410,7 +1636,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
   }
 
   // Botões de fechar ticket
-  if (['fechar_ticket_maker', 'fechar_ticket_postador', 'fechar_ticket_migracao'].includes(customId)) {
+  if (['fechar_ticket_maker', 'fechar_ticket_postador', 'fechar_ticket_migracao', 'fechar_ticket_ajuda', 'fechar_ticket_denuncia'].includes(customId)) {
     const hasRecruitmentRole = interaction.member.roles.cache.has(recruitmentRoleId);
 
     if (!hasRecruitmentRole) {
