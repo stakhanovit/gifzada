@@ -1373,7 +1373,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     };
 
     const embed = new EmbedBuilder()
-      .setTitle('✅ **OPÇÃO SELECIONADA**')
+      .setTitle(' **OPÇÃO SELECIONADA**')
       .setDescription(responseMessages[tipos[customId]])
       .setColor('#8804fc')
       .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
@@ -2110,38 +2110,38 @@ client.on('messageCreate', async message => {
       const formatosEsperados = formatosValidos[tipo].join(', ');
       
       const errorEmbed = new EmbedBuilder()
-        .setTitle('❌ **FORMATO INCORRETO**')
+        .setTitle(' **FORMATO INCORRETO**')
         .setDescription(`
 ╭─────────────────────────────────╮
 │   **Formato não compatível!**   │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-🎯 Conversão Selecionada: ${tipo.toUpperCase()}
-📁 Arquivo Enviado: ${file.name}
-❌ Formato Detectado: ${fileExtension}
-✅ Formatos Esperados: ${formatosEsperados}
+ Conversão Selecionada: ${tipo.toUpperCase()}
+ Arquivo Enviado: ${file.name}
+ Formato Detectado: ${fileExtension}
+ Formatos Esperados: ${formatosEsperados}
 \`\`\`
 
-## 💡 **O QUE FAZER:**
+##  **O QUE FAZER:**
 
 ${tipo === 'video-to-gif' ? 
-  `### 🎬 **Para Vídeo → GIF:**
+  `###  **Para Vídeo → GIF:**
    \`•\` Envie um arquivo de **vídeo**
    \`•\` Formatos aceitos: **MP4, AVI, MOV, WMV, MKV, WEBM**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` : 
   tipo === 'resize-gif' ?
-  `### 🔄 **Para Redimensionar GIF:**
+  `###  **Para Redimensionar GIF:**
    \`•\` Envie um arquivo **GIF animado**
    \`•\` Formato aceito: **GIF**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` :
-  `### ✂️ **Para Cortar Imagem:**
+  `###  **Para Cortar Imagem:**
    \`•\` Envie uma **imagem** ou **GIF**
    \`•\` Formatos aceitos: **PNG, JPG, JPEG, GIF, WEBP, BMP**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**`
 }
 
-> 🔄 **Envie o arquivo correto ou escolha uma nova opção de conversão**
+>  **Envie o arquivo correto ou escolha uma nova opção de conversão**
 `)
         .setColor('#ff4444')
         .setFooter({ text: 'Verifique o formato do arquivo e tente novamente' })
@@ -2154,17 +2154,17 @@ ${tipo === 'video-to-gif' ?
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
-    .setTitle('⏳ **PROCESSAMENTO EM ANDAMENTO**')
+    .setTitle(' **PROCESSAMENTO EM ANDAMENTO**')
     .setDescription(`
 ╭─────────────────────────────────╮
 │   **Analisando seu arquivo...**  │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-📁 Arquivo: ${file.name}
-📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
-🎯 Tipo: ${tipo.toUpperCase()}
-⏱️ Status: Iniciando processamento...
+ Arquivo: ${file.name}
+ Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+ Tipo: ${tipo.toUpperCase()}
+ Status: Iniciando processamento...
 \`\`\`
 
 **PROGRESSO:**
@@ -2172,7 +2172,7 @@ ${tipo === 'video-to-gif' ?
 
 `)
     .setColor('#ffaa00')
-    .setFooter({ text: '⚡ Sistema de conversão gifzada' })
+    .setFooter({ text: ' Sistema de conversão gifzada' })
     .setTimestamp();
 
   const aguardandoMsg = await message.channel.send({ embeds: [processEmbed] });
@@ -2186,10 +2186,10 @@ ${tipo === 'video-to-gif' ?
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-📁 Arquivo: ${file.name}
-📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
-🎯 Tipo: ${tipo.toUpperCase()}
-⏱️ Status: Convertendo...
+ Arquivo: ${file.name}
+ Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+ Tipo: ${tipo.toUpperCase()}
+ Status: Convertendo...
 \`\`\`
 
 **PROGRESSO:**
@@ -2209,10 +2209,10 @@ ${tipo === 'video-to-gif' ?
 
     if (originalSizeMB > maxInputSize) {
       await aguardandoMsg.edit({
-        content: `❌ **Arquivo de entrada muito grande!**\n\n` +
-                `📊 **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
-                `📋 **Limite:** ${maxInputSize} MB\n\n` +
-                `💡 **Dica:** Use um arquivo menor como entrada.`,
+        content: ` **Arquivo de entrada muito grande!**\n\n` +
+                ` **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
+                ` **Limite:** ${maxInputSize} MB\n\n` +
+                ` **Dica:** Use um arquivo menor como entrada.`,
         embeds: []
       });
       conversaoEscolha.delete(message.channel.id);
@@ -2230,10 +2230,10 @@ ${tipo === 'video-to-gif' ?
 
     if (fileSizeMB > maxOutputSize) {
       await aguardandoMsg.edit({
-        content: `❌ **Arquivo convertido muito grande!**\n\n` +
-                `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                `💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
+        content: ` **Arquivo convertido muito grande!**\n\n` +
+                ` **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
+                ` **Limite Discord:** ${maxOutputSize} MB\n\n` +
+                ` **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
         embeds: []
       });
 
@@ -2317,7 +2317,7 @@ ${tipo === 'video-to-gif' ?
 
     // Primeiro limpar completamente a mensagem de progresso
     await aguardandoMsg.edit({
-      content: '🔄 **Finalizando conversão...**',
+      content: ' **Finalizando conversão...**',
       embeds: [],
       files: [],
       components: []
@@ -2502,7 +2502,7 @@ async function processFile(attachment, type, percentage = null) {
     case 'batch-convert': {
       // Para conversão em lote, processar como vídeo para GIF por padrão
       const validFormats = ['.mp4', '.wmv', '.flv', '.mov', '.gif', '.png', '.jpg', '.jpeg'];
-      const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
+      const fileExtension = afttachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
 
       if (!fileExtension || !validFormats.includes(fileExtension)) {
         throw new Error('Formato não suportado para conversão em lote. Use: vídeos ou imagens');
