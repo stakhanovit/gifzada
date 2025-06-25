@@ -1671,24 +1671,32 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     // Se for ticket de maker, enviar para apadrinhamento
     if (customId === 'fechar_ticket_maker') {
       try {
-        // Buscar as informações do maker na thread
-        const messages = await interaction.channel.messages.fetch({ limit: 10 });
-        const makerMessage = messages.find(msg => msg.embeds.length > 0 && msg.embeds[0].title?.includes('SEJA MAKER'));
+        // Buscar todas as mensagens da thread para encontrar a embed do maker
+        const messages = await interaction.channel.messages.fetch({ limit: 50 });
+        const makerMessage = messages.find(msg => 
+          msg.embeds.length > 0 && 
+          msg.embeds[0].title && 
+          msg.embeds[0].title.includes('SEJA MAKER')
+        );
 
         if (makerMessage && makerMessage.embeds[0]) {
           const embed = makerMessage.embeds[0];
           const description = embed.description;
 
-          // Extrair informações da descrição
-          const nomeMatch = description.match(/\*\*Nome:\*\*\s*(.+)/);
-          const idadeMatch = description.match(/\*\*Idade:\*\*\s*(.+)/);
-          const foiMakerMatch = description.match(/\*\*Já foi maker de outro servidor de GIFS\?\*\*\s*(.+)/);
-          const objetivoMatch = description.match(/\*\*Objetivo a alcançar:\*\*\s*(.+)/);
+          console.log('Descrição encontrada:', description); // Debug
+
+          // Extrair informações da descrição com regex mais robustos
+          const nomeMatch = description.match(/\*\*Nome:\*\*\s*\n?(.+?)(?=\n\*\*|\n$|$)/s);
+          const idadeMatch = description.match(/\*\*Idade:\*\*\s*\n?(.+?)(?=\n\*\*|\n$|$)/s);
+          const foiMakerMatch = description.match(/\*\*Já foi maker de outro servidor de GIFS\?\*\*\s*\n?(.+?)(?=\n\*\*|\n$|$)/s);
+          const objetivoMatch = description.match(/\*\*Objetivo a alcançar:\*\*\s*\n?(.+?)(?=\nCaso|\n$|$)/s);
 
           const nome = nomeMatch ? nomeMatch[1].trim() : 'Não informado';
           const idade = idadeMatch ? idadeMatch[1].trim() : 'Não informado';
           const foiMaker = foiMakerMatch ? foiMakerMatch[1].trim() : 'Não informado';
           const objetivo = objetivoMatch ? objetivoMatch[1].trim() : 'Não informado';
+
+          console.log('Dados extraídos:', { nome, idade, foiMaker, objetivo }); // Debug
 
           // Canal de apadrinhamento
           const apadrinhamentoChannel = client.channels.cache.get('1231658019356672020');
@@ -1707,6 +1715,8 @@ ${idade}
 ${foiMaker}
 **Objetivo a alcançar:**
 ${objetivo}
+
+**Usuário:** <@${interaction.channel.name.split('・')[1]}>
 `)
               .setColor('#9c41ff')
               .setTimestamp();
@@ -1723,7 +1733,13 @@ ${objetivo}
               embeds: [apadrinhamentoEmbed],
               components: [apadrinhamentoButton]
             });
+
+            console.log('Apadrinhamento enviado com sucesso!'); // Debug
+          } else {
+            console.error('Canal de apadrinhamento não encontrado!');
           }
+        } else {
+          console.error('Mensagem de maker não encontrada na thread!');
         }
       } catch (error) {
         console.error('Erro ao enviar apadrinhamento:', error);
@@ -2317,7 +2333,7 @@ ${tipo === 'video-to-gif' ?
 
     // Primeiro limpar completamente a mensagem de progresso
     await aguardandoMsg.edit({
-      content: ' **Finalizando conversão...**',
+      content: '🔄 **Finalizando conversão...**',
       embeds: [],
       files: [],
       components: []
@@ -2502,7 +2518,7 @@ async function processFile(attachment, type, percentage = null) {
     case 'batch-convert': {
       // Para conversão em lote, processar como vídeo para GIF por padrão
       const validFormats = ['.mp4', '.wmv', '.flv', '.mov', '.gif', '.png', '.jpg', '.jpeg'];
-      const fileExtension = afttachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
+      const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
 
       if (!fileExtension || !validFormats.includes(fileExtension)) {
         throw new Error('Formato não suportado para conversão em lote. Use: vídeos ou imagens');
