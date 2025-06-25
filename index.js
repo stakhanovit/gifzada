@@ -503,7 +503,18 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-      const targetMember = interaction.guild.members.cache.get(targetUser.id);
+      
+      // Buscar o membro com mais detalhes, incluindo fetch se necessário
+      let targetMember;
+      try {
+        targetMember = await interaction.guild.members.fetch(targetUser.id);
+      } catch (error) {
+        console.error('Erro ao buscar membro:', error);
+        return interaction.reply({
+          content: '❌ Usuário não encontrado no servidor ou não foi possível acessar suas informações.',
+          ephemeral: true
+        });
+      }
 
       if (!targetMember) {
         return interaction.reply({
@@ -560,7 +571,18 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-      const targetMember = interaction.guild.members.cache.get(targetUser.id);
+      
+      // Buscar o membro com mais detalhes, incluindo fetch se necessário
+      let targetMember;
+      try {
+        targetMember = await interaction.guild.members.fetch(targetUser.id);
+      } catch (error) {
+        console.error('Erro ao buscar membro:', error);
+        return interaction.reply({
+          content: '❌ Usuário não encontrado no servidor ou não foi possível acessar suas informações.',
+          ephemeral: true
+        });
+      }
 
       if (!targetMember) {
         return interaction.reply({
@@ -1886,7 +1908,18 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_maker_')) {
     const userId = customId.replace('confirm_maker_', '');
-    const targetMember = interaction.guild.members.cache.get(userId);
+    
+    // Buscar o membro com fetch para garantir dados atualizados
+    let targetMember;
+    try {
+      targetMember = await interaction.guild.members.fetch(userId);
+    } catch (error) {
+      console.error('Erro ao buscar membro para confirmação maker:', error);
+      return interaction.reply({
+        content: '❌ Usuário não encontrado no servidor ou não foi possível acessar suas informações.',
+        ephemeral: true
+      });
+    }
 
     if (!targetMember) {
       return interaction.reply({
@@ -1953,7 +1986,18 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_postador_')) {
     const userId = customId.replace('confirm_postador_', '');
-    const targetMember = interaction.guild.members.cache.get(userId);
+    
+    // Buscar o membro com fetch para garantir dados atualizados
+    let targetMember;
+    try {
+      targetMember = await interaction.guild.members.fetch(userId);
+    } catch (error) {
+      console.error('Erro ao buscar membro para confirmação postador:', error);
+      return interaction.reply({
+        content: '❌ Usuário não encontrado no servidor ou não foi possível acessar suas informações.',
+        ephemeral: true
+      });
+    }
 
     if (!targetMember) {
       return interaction.reply({
@@ -2048,6 +2092,65 @@ client.on('messageCreate', async message => {
   // Lidar com objeto ou string
   const tipo = typeof tipoData === 'object' ? tipoData.type : tipoData;
   const percentage = typeof tipoData === 'object' ? tipoData.percentage : null;
+
+  // Validação de formato de arquivo
+  const fileName = file.name.toLowerCase();
+  const fileExtension = fileName.match(/\.[^.]*$/)?.[0];
+
+  // Definir formatos válidos para cada tipo
+  const formatosValidos = {
+    'video-to-gif': ['.mp4', '.wmv', '.flv', '.mov', '.avi', '.mkv', '.webm'],
+    'resize-gif': ['.gif'],
+    'crop-image': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
+  };
+
+  // Verificar se o formato é válido para o tipo selecionado
+  if (formatosValidos[tipo] && fileExtension) {
+    if (!formatosValidos[tipo].includes(fileExtension)) {
+      const formatosEsperados = formatosValidos[tipo].join(', ');
+      
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ **FORMATO INCORRETO**')
+        .setDescription(`
+╭─────────────────────────────────╮
+│   **Formato não compatível!**   │
+╰─────────────────────────────────╯
+
+\`\`\`yaml
+🎯 Conversão Selecionada: ${tipo.toUpperCase()}
+📁 Arquivo Enviado: ${file.name}
+❌ Formato Detectado: ${fileExtension}
+✅ Formatos Esperados: ${formatosEsperados}
+\`\`\`
+
+## 💡 **O QUE FAZER:**
+
+${tipo === 'video-to-gif' ? 
+  `### 🎬 **Para Vídeo → GIF:**
+   \`•\` Envie um arquivo de **vídeo**
+   \`•\` Formatos aceitos: **MP4, AVI, MOV, WMV, MKV, WEBM**
+   \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` : 
+  tipo === 'resize-gif' ?
+  `### 🔄 **Para Redimensionar GIF:**
+   \`•\` Envie um arquivo **GIF animado**
+   \`•\` Formato aceito: **GIF**
+   \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` :
+  `### ✂️ **Para Cortar Imagem:**
+   \`•\` Envie uma **imagem** ou **GIF**
+   \`•\` Formatos aceitos: **PNG, JPG, JPEG, GIF, WEBP, BMP**
+   \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**`
+}
+
+> 🔄 **Envie o arquivo correto ou escolha uma nova opção de conversão**
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: 'Verifique o formato do arquivo e tente novamente' })
+        .setTimestamp();
+
+      await message.channel.send({ embeds: [errorEmbed] });
+      return;
+    }
+  }
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
