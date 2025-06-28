@@ -23,7 +23,19 @@ const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
 const { createCanvas, loadImage, registerFont } = require('canvas');
+const db = require('./database.js');
 require('dotenv').config();
+
+// Tratamento de erros não capturados para evitar crashes
+process.on('uncaughtException', (error) => {
+  console.error('Erro não capturado:', error);
+  // Não encerrar o processo, apenas logar
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Promise rejeitada não tratada:', reason);
+  // Não encerrar o processo, apenas logar
+});
 
 // Criar servidor HTTP
 const app = express();
@@ -49,6 +61,14 @@ const conversaoEscolha = new Map();
 
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
+
+  // Conectar ao MongoDB com tratamento de erro
+  try {
+    await db.connect();
+  } catch (error) {
+    console.error('Erro ao conectar MongoDB:', error);
+    // Continuar mesmo sem MongoDB para evitar crash
+  }
 
   // Registrar comandos slash
   const commands = [
@@ -356,15 +376,15 @@ client.on('messageCreate', async message => {
     const hasAuthorizedRole = message.member.roles.cache.some(role => authorizedRoles.includes(role.id));
 
     if (!hasAuthorizedRole) {
-      return message.reply('❌ Você não tem permissão para alterar o background padrão.');
+      return message.reply('❌ Você não tem permissão para alterar o background padrão do servidor.');
     }
 
     const args = message.content.split(' ');
-    
+
     if (args.length === 1) {
       // Mostrar background atual
-      const currentBg = process.env.PROFILE_BACKGROUND || 'padrão';
-      return message.reply(`📸 **Background atual:** ${currentBg === 'padrão' ? 'Gradiente padrão' : currentBg}`);
+      const currentBg = await db.getServerConfig(message.guild.id, 'default_background') || 'padrão';
+      return message.reply(`📸 **Background padrão do servidor:** ${currentBg === 'padrão' ? 'Gradiente padrão' : currentBg}`);
     }
 
     const backgroundUrl = args[1];
@@ -383,17 +403,17 @@ client.on('messageCreate', async message => {
         return message.reply('❌ URL não é uma imagem válida!');
       }
 
-      // Salvar no ambiente (temporário)
-      process.env.PROFILE_BACKGROUND = backgroundUrl;
+      // Salvar no banco de dados
+      await db.setServerConfig(message.guild.id, 'default_background', backgroundUrl);
 
       const successEmbed = new EmbedBuilder()
-        .setTitle('✅ **BACKGROUND ATUALIZADO**')
+        .setTitle('✅ **BACKGROUND PADRÃO ATUALIZADO**')
         .setDescription(`
-🖼️ **Novo background definido com sucesso!**
+🖼️ **Novo background padrão definido com sucesso!**
 
 **URL:** ${backgroundUrl}
 
-> 🎨 *Todos os próximos profile cards usarão este background*
+> 🎨 *Todos os próximos profile cards usarão este background como padrão*
 `)
         .setColor('#00ff88')
         .setImage(backgroundUrl)
@@ -404,6 +424,39 @@ client.on('messageCreate', async message => {
     } catch (error) {
       console.error('Erro ao validar background:', error);
       await message.reply('❌ Erro ao carregar a imagem. Verifique se a URL está correta.');
+    }
+  }
+
+  if (message.content.startsWith('!sobremim ')) {
+    const newMessage = message.content.slice(10); // Remove "!sobremim "
+    
+    if (!newMessage || newMessage.length < 1) {
+      return message.reply('❌ Digite uma mensagem! Exemplo: `!sobremim Amo fazer GIFs!`');
+    }
+
+    if (newMessage.length > 100) {
+      return message.reply('❌ A mensagem deve ter no máximo 100 caracteres!');
+    }
+
+    try {
+      await db.setSobremim(message.author.id, message.guild.id, newMessage);
+      
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ **SOBRE MIM ATUALIZADO**')
+        .setDescription(`
+📝 **Sua mensagem foi salva com sucesso!**
+
+**Nova mensagem:** ${newMessage}
+
+> 💫 *Aparecerá no seu profile card!*
+`)
+        .setColor('#00ff88')
+        .setTimestamp();
+
+      await message.reply({ embeds: [successEmbed] });
+    } catch (error) {
+      console.error('Erro ao salvar sobremim:', error);
+      await message.reply('❌ Erro ao salvar sua mensagem. Tente novamente.');
     }
   }
 
@@ -424,7 +477,7 @@ client.on('messageCreate', async message => {
 \`\`\`yaml
 👤 Usuário: ${targetUser.username}
 🎨 Status: Criando card personalizado...
-⏱️ Progresso: Carregando dados...
+⏱️ Progresso: Carregando dados do banco...
 \`\`\`
 
 > 🖼️ *Aguarde enquanto criamos seu card de perfil!*
@@ -434,19 +487,237 @@ client.on('messageCreate', async message => {
 
       const loadingMsg = await message.channel.send({ embeds: [loadingEmbed] });
 
-      // Gerar o profile card
-      const profileCardBuffer = await generateProfileCard(targetUser, targetMember, message.guild);
-      const attachment = new AttachmentBuilder(profileCardBuffer, { name: `profile_${targetUser.id}.png` });
+      // Gerar o profile card com tratamento de erro melhorado
+      try {
+        const profileCardBuffer = await generateProfileCard(targetUser, targetMember, message.guild);
+        const attachment = new AttachmentBuilder(profileCardBuffer, { name: `profile_${targetUser.id}.png` });
 
-      await loadingMsg.edit({
-        content: '',
-        embeds: [],
-        files: [attachment]
-      });
+        await loadingMsg.edit({
+          content: '',
+          embeds: [],
+          files: [attachment]
+        });
+      } catch (cardError) {
+        console.error('Erro específico do profile card:', cardError);
+        
+        // Enviar embed simples sem imagem
+        const errorEmbed = new EmbedBuilder()
+          .setTitle('📊 **PROFILE STATS**')
+          .setDescription(`
+**Usuário:** ${targetUser.username}
+**Meta:** Carregando...
+**Entregas:** Carregando...
+**Dinheiro:** Carregando...
+
+> ⚠️ *Profile card temporariamente indisponível*
+`)
+          .setColor('#ff9900')
+          .setTimestamp();
+
+        await loadingMsg.edit({
+          content: '',
+          embeds: [errorEmbed]
+        });
+      }
 
     } catch (error) {
-      console.error('Erro ao gerar profile card:', error);
-      await message.reply('❌ Erro ao gerar o profile card. Tente novamente mais tarde.');
+      console.error('Erro geral ao processar profile:', error);
+      await message.reply('❌ Erro ao processar perfil. Tente novamente mais tarde.');
+    }
+  }
+
+  // Sistema automático de pontos por entregas
+  // Detectar links de mensagens do Discord para dar pontos automaticamente
+  const discordMessageLinkRegex = /https:\/\/(?:discord\.com|discordapp\.com)\/channels\/(\d+)\/(\d+)\/(\d+)/g;
+  const messageLinks = message.content.match(discordMessageLinkRegex);
+
+  if (messageLinks && messageLinks.length > 0) {
+    // Configuração de pontos por canal
+    const pontosConfig = {
+      '1182331070750933073': 2, // Servidor conexão - canal padrão
+      '1329894869421920390': 4, // Canal que dá 4 pontos  
+      '1329894956503924839': 3  // Canal que dá 3 pontos
+    };
+
+    let totalPontos = 0;
+    const canaisDetectados = [];
+
+    // Processar cada link encontrado
+    for (const link of messageLinks) {
+      const match = link.match(/\/channels\/(\d+)\/(\d+)\/(\d+)/);
+      if (match) {
+        const [, guildId, channelId, messageId] = match;
+        
+        // Verificar se o canal está na configuração
+        if (pontosConfig[channelId]) {
+          const pontos = pontosConfig[channelId];
+          totalPontos += pontos;
+          canaisDetectados.push({ channelId, pontos });
+        }
+      }
+    }
+
+    // Se encontrou pontos para dar
+    if (totalPontos > 0) {
+      try {
+        // SEMPRE salvar no servidor oficial (953748240589787136)
+        const servidorOficial = '953748240589787136';
+        
+        // Atualizar meta no banco do servidor oficial
+        await db.updateMeta(message.author.id, servidorOficial, totalPontos);
+        
+        // Buscar dados atualizados do usuário
+        const profile = await db.getUserProfile(message.author.id, servidorOficial);
+        
+        // Buscar o membro no servidor oficial para verificar cargo
+        let targetMember = null;
+        try {
+          const oficialGuild = client.guilds.cache.get(servidorOficial);
+          if (oficialGuild) {
+            targetMember = await oficialGuild.members.fetch(message.author.id);
+          }
+        } catch (error) {
+          console.log('Usuário não encontrado no servidor oficial');
+        }
+        
+        // Se não conseguir buscar o membro, usar valores padrão
+        const metaInfo = targetMember ? 
+          db.getMetaInfoByCargo(targetMember) : 
+          { nivel: 'Iniciante', max: 20, cor: '#d2a8ff' };
+
+        // Criar embed de confirmação
+        const embed = new EmbedBuilder()
+          .setTitle('✅ **PONTOS AUTOMÁTICOS ADICIONADOS**')
+          .setDescription(`
+🎯 **Entrega detectada!** Pontos adicionados automaticamente.
+
+**Usuário:** ${message.author}
+**Pontos ganhos:** +${totalPontos}
+**Meta atual:** ${profile.meta}/${metaInfo.max}
+**Nível:** Meta ${metaInfo.nivel}
+
+**Detalhes da entrega:**
+${canaisDetectados.map(canal => `• Canal <#${canal.channelId}>: +${canal.pontos} pontos`).join('\n')}
+
+> 💾 *Dados salvos no servidor oficial*
+`)
+          .setColor('#00ff88')
+          .setTimestamp();
+
+        await message.reply({ embeds: [embed] });
+
+      } catch (error) {
+        console.error('Erro ao processar pontos automáticos:', error);
+        await message.reply('❌ Erro ao processar pontos da entrega. Tente novamente.');
+      }
+    }
+  }
+
+  if (message.content.startsWith('!addentrega ') || message.content.startsWith('!removeentrega ')) {
+    const isAdd = message.content.startsWith('!addentrega ');
+    const command = isAdd ? '!addentrega ' : '!removeentrega ';
+    
+    // Verificar permissões (apenas staff)
+    const staffRoleId = '1094385139976507523';
+    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
+
+    if (!hasStaffRole) {
+      return message.reply('❌ Apenas membros da staff podem gerenciar entregas.');
+    }
+
+    const args = message.content.slice(command.length).split(' ');
+    if (args.length < 2) {
+      return message.reply(`❌ Use: \`${command}<@usuário> <quantidade>\``);
+    }
+
+    const targetUser = message.mentions.users.first();
+    const amount = parseInt(args[1]);
+
+    if (!targetUser) {
+      return message.reply('❌ Mencione um usuário válido!');
+    }
+
+    if (isNaN(amount) || amount <= 0) {
+      return message.reply('❌ Digite uma quantidade válida!');
+    }
+
+    try {
+      if (isAdd) {
+        await db.updateEntregas(targetUser.id, message.guild.id, amount);
+      } else {
+        await db.updateEntregas(targetUser.id, message.guild.id, -amount);
+      }
+
+      const profile = await db.getUserProfile(targetUser.id, message.guild.id);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`✅ **ENTREGAS ${isAdd ? 'ADICIONADAS' : 'REMOVIDAS'}**`)
+        .setDescription(`
+**Usuário:** ${targetUser}
+**${isAdd ? 'Adicionado' : 'Removido'}:** ${amount} entregas
+**Entregas totais:** ${profile.entregas}
+`)
+        .setColor(isAdd ? '#00ff88' : '#ff8800')
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Erro ao gerenciar entregas:', error);
+      await message.reply('❌ Erro ao atualizar entregas. Tente novamente.');
+    }
+  }
+
+  if (message.content.startsWith('!adddinheiro ') || message.content.startsWith('!removedinheiro ')) {
+    const isAdd = message.content.startsWith('!adddinheiro ');
+    const command = isAdd ? '!adddinheiro ' : '!removedinheiro ';
+    
+    // Verificar permissões (apenas staff)
+    const staffRoleId = '1094385139976507523';
+    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
+
+    if (!hasStaffRole) {
+      return message.reply('❌ Apenas membros da staff podem gerenciar dinheiro.');
+    }
+
+    const args = message.content.slice(command.length).split(' ');
+    if (args.length < 2) {
+      return message.reply(`❌ Use: \`${command}<@usuário> <quantidade>\``);
+    }
+
+    const targetUser = message.mentions.users.first();
+    const amount = parseInt(args[1]);
+
+    if (!targetUser) {
+      return message.reply('❌ Mencione um usuário válido!');
+    }
+
+    if (isNaN(amount) || amount <= 0) {
+      return message.reply('❌ Digite uma quantidade válida!');
+    }
+
+    try {
+      if (isAdd) {
+        await db.updateDinheiro(targetUser.id, message.guild.id, amount);
+      } else {
+        await db.updateDinheiro(targetUser.id, message.guild.id, -amount);
+      }
+
+      const profile = await db.getUserProfile(targetUser.id, message.guild.id);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`✅ **DINHEIRO ${isAdd ? 'ADICIONADO' : 'REMOVIDO'}**`)
+        .setDescription(`
+**Usuário:** ${targetUser}
+**${isAdd ? 'Adicionado' : 'Removido'}:** ${amount}
+**Dinheiro total:** ${profile.dinheiro}
+`)
+        .setColor(isAdd ? '#00ff88' : '#ff8800')
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Erro ao gerenciar dinheiro:', error);
+      await message.reply('❌ Erro ao atualizar dinheiro. Tente novamente.');
     }
   }
 
@@ -454,16 +725,16 @@ client.on('messageCreate', async message => {
     // Contar threads de conversão no canal
     const threadsCollection = await message.channel.threads.fetchActive();
     const archivedThreads = await message.channel.threads.fetchArchived({ limit: 100 });
-    
+
     // Filtrar apenas threads de conversão (que começam com 🎞️)
     const activeConversionThreads = threadsCollection.threads.filter(thread => 
       thread.name.includes('Conversão') || thread.name.includes('🎞️')
     ).size;
-    
+
     const archivedConversionThreads = archivedThreads.threads.filter(thread => 
       thread.name.includes('Conversão') || thread.name.includes('🎞️')
     ).size;
-    
+
     const totalThreads = activeConversionThreads + archivedConversionThreads;
 
     const embed = new EmbedBuilder()
@@ -2385,38 +2656,38 @@ client.on('messageCreate', async message => {
       const formatosEsperados = formatosValidos[tipo].join(', ');
 
       const errorEmbed = new EmbedBuilder()
-        .setTitle(' **FORMATO INCORRETO**')
+        .setTitle('❌ **FORMATO INCORRETO**')
         .setDescription(`
 ╭─────────────────────────────────╮
 │   **Formato não compatível!**   │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Conversão Selecionada: ${tipo.toUpperCase()}
- Arquivo Enviado: ${file.name}
- Formato Detectado: ${fileExtension}
- Formatos Esperados: ${formatosEsperados}
+🎯 Conversão Selecionada: ${tipo.toUpperCase()}
+📁 Arquivo Enviado: ${file.name}
+❌ Formato Detectado: ${fileExtension}
+✅ Formatos Esperados: ${formatosEsperados}
 \`\`\`
 
-##  **O QUE FAZER:**
+## 💡 **O QUE FAZER:**
 
 ${tipo === 'video-to-gif' ? 
-  `###  **Para Vídeo → GIF:**
+  `### 🎬 **Para Vídeo → GIF:**
    \`•\` Envie um arquivo de **vídeo**
    \`•\` Formatos aceitos: **MP4, AVI, MOV, WMV, MKV, WEBM**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` : 
   tipo === 'resize-gif' ?
-  `###  **Para Redimensionar GIF:**
+  `### 🔄 **Para Redimensionar GIF:**
    \`•\` Envie um arquivo **GIF animado**
    \`•\` Formato aceito: **GIF**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` :
-  `###  **Para Cortar Imagem:**
+  `### ✂️ **Para Cortar Imagem:**
    \`•\` Envie uma **imagem** ou **GIF**
    \`•\` Formatos aceitos: **PNG, JPG, JPEG, GIF, WEBP, BMP**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**`
 }
 
->  **Envie o arquivo correto ou escolha uma nova opção de conversão**
+> 🔄 **Envie o arquivo correto ou escolha uma nova opção de conversão**
 `)
         .setColor('#ff4444')
         .setFooter({ text: 'Verifique o formato do arquivo e tente novamente' })
@@ -2429,17 +2700,17 @@ ${tipo === 'video-to-gif' ?
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
-    .setTitle(' **PROCESSAMENTO EM ANDAMENTO**')
+    .setTitle('⏳ **PROCESSAMENTO EM ANDAMENTO**')
     .setDescription(`
 ╭─────────────────────────────────╮
 │   **Analisando seu arquivo...**  │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Arquivo: ${file.name}
- Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
- Tipo: ${tipo.toUpperCase()}
-⏱ Status: Iniciando processamento...
+📁 Arquivo: ${file.name}
+📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+🎯 Tipo: ${tipo.toUpperCase()}
+⏱️ Status: Iniciando processamento...
 \`\`\`
 
 **PROGRESSO:**
@@ -2447,7 +2718,7 @@ ${tipo === 'video-to-gif' ?
 
 `)
     .setColor('#ffaa00')
-    .setFooter({ text: ' Sistema de conversão gifzada' })
+    .setFooter({ text: '⚡ Sistema de conversão gifzada' })
     .setTimestamp();
 
   const aguardandoMsg = await message.channel.send({ embeds: [processEmbed] });
@@ -2461,10 +2732,10 @@ ${tipo === 'video-to-gif' ?
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Arquivo: ${file.name}
- Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
- Tipo: ${tipo.toUpperCase()}
- Status: Convertendo...
+📁 Arquivo: ${file.name}
+📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+🎯 Tipo: ${tipo.toUpperCase()}
+⏱️ Status: Convertendo...
 \`\`\`
 
 **PROGRESSO:**
@@ -2484,10 +2755,10 @@ ${tipo === 'video-to-gif' ?
 
     if (originalSizeMB > maxInputSize) {
       await aguardandoMsg.edit({
-        content: ` **Arquivo de entrada muito grande!**\n\n` +
-                ` **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
-                ` **Limite:** ${maxInputSize} MB\n\n` +
-                ` **Dica:** Use um arquivo menor como entrada.`,
+        content: `❌ **Arquivo de entrada muito grande!**\n\n` +
+                `📊 **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
+                `📋 **Limite:** ${maxInputSize} MB\n\n` +
+                `💡 **Dica:** Use um arquivo menor como entrada.`,
         embeds: []
       });
       conversaoEscolha.delete(message.channel.id);
@@ -2505,10 +2776,10 @@ ${tipo === 'video-to-gif' ?
 
     if (fileSizeMB > maxOutputSize) {
       await aguardandoMsg.edit({
-        content: ` **Arquivo convertido muito grande!**\n\n` +
-                ` **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                ` **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                ` **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
+        content: `❌ **Arquivo convertido muito grande!**\n\n` +
+                `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
+                `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
+                `💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
         embeds: []
       });
 
@@ -2592,7 +2863,7 @@ ${tipo === 'video-to-gif' ?
 
     // Primeiro limpar completamente a mensagem de progresso
     await aguardandoMsg.edit({
-      content: ' **Finalizando conversão...**',
+      content: '🔄 **Finalizando conversão...**',
       embeds: [],
       files: [],
       components: []
@@ -2860,7 +3131,7 @@ async function processFile(attachment, type, percentage = null) {
       const response = await fetch(attachment.url);
       const buffer = await response.buffer();
       const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
-      
+
       const tempInput = `cut_input_${nomeBase}${fileExtension}`;
       const tempOutput = `cut_output_${nomeBase}.gif`;
       fs.writeFileSync(tempInput, buffer);
@@ -3156,10 +3427,37 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
 
 // Função para gerar profile card com Canvas - Novo design moderno
 async function generateProfileCard(user, member, guild) {
+  try {
+    // Buscar dados do usuário no banco com fallback
+    let profile;
+    let metaInfo;
+    
+    try {
+      profile = await db.getUserProfile(user.id, guild.id);
+      metaInfo = db.getMetaInfoByCargo(member);
+    } catch (dbError) {
+      console.error('Erro ao buscar dados do banco:', dbError);
+      // Usar dados padrão se o banco falhar
+      profile = {
+        meta: 0,
+        entregas: 0,
+        dinheiro: 0,
+        sobremim: 'Use !sobremim <msg> para alterar!',
+        background: 'padrão'
+      };
+      metaInfo = { nivel: 'Iniciante', max: 20, cor: '#d2a8ff' };
+    }
+  
+  // Buscar background personalizado do usuário ou usar o padrão do servidor
+  let backgroundUrl = profile.background;
+  if (backgroundUrl === 'padrão') {
+    backgroundUrl = await db.getServerConfig(guild.id, 'default_background') || 'padrão';
+  }
+
   // Dimensões do card
   const width = 800;
   const height = 480;
-  
+
   // Criar canvas
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
@@ -3181,11 +3479,10 @@ async function generateProfileCard(user, member, guild) {
 
   // FUNDO PRINCIPAL
   let backgroundImage = null;
-  const customBg = process.env.PROFILE_BACKGROUND;
-  
-  if (customBg && customBg !== 'padrão') {
+
+  if (backgroundUrl && backgroundUrl !== 'padrão') {
     try {
-      backgroundImage = await loadImage(customBg);
+      backgroundImage = await loadImage(backgroundUrl);
     } catch (error) {
       console.error('Erro ao carregar background customizado:', error);
     }
@@ -3201,7 +3498,7 @@ async function generateProfileCard(user, member, guild) {
     gradient.addColorStop(0.3, '#FF69B4');
     gradient.addColorStop(0.6, '#00BFFF');
     gradient.addColorStop(1, '#9945FF');
-    
+
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
   }
@@ -3251,10 +3548,10 @@ async function generateProfileCard(user, member, guild) {
   ctx.textAlign = 'left';
   ctx.fillText(user.username, 220, 120);
 
-  // Subtitle/descrição
+  // Subtitle/descrição do perfil
   ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
   ctx.font = '20px Arial';
-  ctx.fillText(`Use !sobremim <msg> para alterar!`, 220, 150);
+  ctx.fillText(profile.sobremim, 220, 150);
 
   // Status do usuário com indicador visual
   const presence = member.presence;
@@ -3309,7 +3606,7 @@ async function generateProfileCard(user, member, guild) {
 
   // Encontrar o cargo do usuário
   let userRole = { name: 'Membro', color: '#c7c7c7' }; // Default
-  
+
   for (const [roleId, roleInfo] of Object.entries(roleMap)) {
     if (member.roles.cache.has(roleId)) {
       userRole = roleInfo;
@@ -3317,15 +3614,16 @@ async function generateProfileCard(user, member, guild) {
     }
   }
 
-  // Calcular estatísticas
-  const xp = Math.floor(Math.random() * 100);
-  const money = (Math.random() * 10).toFixed(1) + 'M';
+  // Formatar dinheiro
+  const money = profile.dinheiro < 1000 ? 
+    profile.dinheiro.toString() : 
+    (profile.dinheiro / 1000000).toFixed(1) + 'M';
 
   const stats = [
     { icon: '🌍', label: userRole.name, color: userRole.color },
-    { icon: '⭐', label: xp + '/100', color: '#FF9800' },
-    { icon: '💎', label: '7 Reps', color: '#FFC107' },
-    { icon: '💰', label: money, color: '#4CAF50' }
+    { icon: '🎯', label: `${profile.meta}/${metaInfo.max}`, color: metaInfo.cor },
+    { icon: '📦', label: `${profile.entregas} Entregas`, color: '#FFFFFF' },
+    { icon: '💰', label: money, color: '#FFFFFF' }
   ];
 
   // Stats preenchidos (lado esquerdo)
@@ -3352,6 +3650,31 @@ async function generateProfileCard(user, member, guild) {
     ctx.fillText(stat.label, statX + 50, slotY + 32);
   }
 
+  // Barra de progresso da meta (se não estiver no máximo)
+  if (metaInfo.nivel !== 'Máximo') {
+    const progressY = 380;
+    const progressWidth = 300;
+    const progressHeight = 20;
+    const progressX = 50;
+    
+    // Fundo da barra
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    roundRect(progressX, progressY, progressWidth, progressHeight, 10);
+    ctx.fill();
+    
+    // Progresso
+    const progress = (profile.meta / metaInfo.max) * progressWidth;
+    ctx.fillStyle = metaInfo.cor;
+    roundRect(progressX, progressY, progress, progressHeight, 10);
+    ctx.fill();
+    
+    // Texto do nível
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Meta ${metaInfo.nivel}`, progressX, progressY - 8);
+  }
+
   // Marca d'água estilizada
   ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
   ctx.font = 'bold 12px Arial';
@@ -3359,6 +3682,14 @@ async function generateProfileCard(user, member, guild) {
   ctx.fillText('GIFZADA • Profile Card', width - 30, height - 15);
 
   return canvas.toBuffer('image/png');
+  } catch (error) {
+    console.error('Erro fatal na geração do profile card:', error);
+    throw new Error('Falha na geração do profile card: ' + error.message);
+  }
 }
 
-client.login(process.env.TOKEN);
+// Login com tratamento de erro
+client.login(process.env.TOKEN).catch(error => {
+  console.error('Erro crítico no login do bot:', error);
+  process.exit(1);
+});
