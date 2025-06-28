@@ -1,4 +1,3 @@
-
 const {
   Client,
   GatewayIntentBits,
@@ -24,6 +23,7 @@ const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 require('dotenv').config();
 
 // Criar servidor HTTP
@@ -340,7 +340,87 @@ client.on('messageCreate', async message => {
     await message.channel.send({ embeds: [embed], components: [suporteRow] });
   }
 
+  if (message.content === '!profile') {
+    // Verificar se o usuário mencionou alguém ou usar o próprio usuário
+    const targetUser = message.mentions.users.first() || message.author;
+    const targetMember = message.guild.members.cache.get(targetUser.id);
+
+    if (!targetMember) {
+      return message.reply('❌ Usuário não encontrado no servidor.');
+    }
+
+    try {
+      // Criar mensagem de carregamento
+      const loadingEmbed = new EmbedBuilder()
+        .setTitle('🎨 **GERANDO PROFILE CARD**')
+        .setDescription(`
+\`\`\`yaml
+👤 Usuário: ${targetUser.username}
+🎨 Status: Criando card personalizado...
+⏱️ Progresso: Carregando dados...
+\`\`\`
+
+> 🖼️ *Aguarde enquanto criamos seu card de perfil!*
+`)
+        .setColor('#9c41ff')
+        .setTimestamp();
+
+      const loadingMsg = await message.channel.send({ embeds: [loadingEmbed] });
+
+      // Gerar o profile card
+      const profileCardBuffer = await generateProfileCard(targetUser, targetMember, message.guild);
+      const attachment = new AttachmentBuilder(profileCardBuffer, { name: `profile_${targetUser.id}.png` });
+
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('✨ **PROFILE CARD CRIADO!**')
+        .setDescription(`
+📋 **Profile Card de ${targetUser.username}**
+
+\`\`\`yaml
+👤 Usuário: ${targetUser.username}
+🏷️ ID: ${targetUser.id}
+📅 Conta criada: ${targetUser.createdAt.toLocaleDateString('pt-BR')}
+🎭 Cargos: ${targetMember.roles.cache.size - 1}
+\`\`\`
+
+> 🎨 *Card personalizado gerado com sucesso!*
+`)
+        .setColor('#00ff88')
+        .setImage(`attachment://profile_${targetUser.id}.png`)
+        .setFooter({ 
+          text: `Profile Card • GIFZADA`,
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await loadingMsg.edit({
+        content: `${message.author}`,
+        embeds: [resultEmbed],
+        files: [attachment]
+      });
+
+    } catch (error) {
+      console.error('Erro ao gerar profile card:', error);
+      await message.reply('❌ Erro ao gerar o profile card. Tente novamente mais tarde.');
+    }
+  }
+
   if (message.content === '!converter') {
+    // Contar threads de conversão no canal
+    const threadsCollection = await message.channel.threads.fetchActive();
+    const archivedThreads = await message.channel.threads.fetchArchived({ limit: 100 });
+    
+    // Filtrar apenas threads de conversão (que começam com 🎞️)
+    const activeConversionThreads = threadsCollection.threads.filter(thread => 
+      thread.name.includes('Conversão') || thread.name.includes('🎞️')
+    ).size;
+    
+    const archivedConversionThreads = archivedThreads.threads.filter(thread => 
+      thread.name.includes('Conversão') || thread.name.includes('🎞️')
+    ).size;
+    
+    const totalThreads = activeConversionThreads + archivedConversionThreads;
+
     const embed = new EmbedBuilder()
       .setTitle('<:a_gifzada:1266774740115132468> **GIFZADA CONVERSOR**')
       .setDescription(`
@@ -380,11 +460,10 @@ client.on('messageCreate', async message => {
 \`•\` Conversão automática para GIF
 \`•\` Qualidade HD preservada
 
-## <:d_tag:1366581862004166656> **ESTATÍSTICAS EM TEMPO REAL:**
-\`•\`  Velocidade: **3x mais rápido**
-\`•\`  Precisão: **99.9% de sucesso**
-\`•\`  Economia: **Até 80% menor**
-\`•\`  Formatos: **15+ suportados**
+### <:d_arrow:1366582051507273728> TikTok → GIF
+\`•\` Cole o link do TikTok
+\`•\` Conversão direta para GIF
+\`•\` Qualidade HD preservada
 `)
       .setThumbnail('https://cdn.discordapp.com/icons/953748240589787136/a_85b194eaf3055cfc583d70b3b14cbaa5.gif?size=2048')
       .setColor('#870cff')
@@ -503,7 +582,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-      
+
       // Buscar o membro com mais detalhes, incluindo fetch se necessário
       let targetMember;
       try {
@@ -571,7 +650,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-      
+
       // Buscar o membro com mais detalhes, incluindo fetch se necessário
       let targetMember;
       try {
@@ -1121,6 +1200,73 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       }
     }
 
+    if (interaction.customId === 'crop_custom_modal') {
+      const cropType = interaction.fields.getTextInputValue('crop_type').toLowerCase();
+      const cropAmount = parseInt(interaction.fields.getTextInputValue('crop_amount'));
+
+      if (isNaN(cropAmount) || cropAmount < 1) {
+        return interaction.reply({
+          content: '❌ Por favor, insira uma quantidade válida em pixels.',
+          ephemeral: true
+        });
+      }
+
+      const validTypes = ['direita', 'esquerda', 'cima', 'baixo'];
+      if (!validTypes.includes(cropType)) {
+        return interaction.reply({
+          content: '❌ Tipo de crop inválido. Use: direita, esquerda, cima ou baixo.',
+          ephemeral: true
+        });
+      }
+
+      conversaoEscolha.set(interaction.channel.id, { 
+        type: 'crop-custom', 
+        cropType: cropType, 
+        cropAmount: cropAmount 
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle('✂️ **CROP CUSTOMIZADO SELECIONADO**')
+        .setDescription(`**Configuração:** Cortar ${cropAmount}px da ${cropType}\n> Envie sua imagem ou GIF para aplicar o crop`)
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
+
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    }
+
+    if (interaction.customId === 'cut_frames_modal') {
+      const startTime = parseFloat(interaction.fields.getTextInputValue('start_time'));
+      const endTime = parseFloat(interaction.fields.getTextInputValue('end_time'));
+
+      if (isNaN(startTime) || isNaN(endTime) || startTime < 0 || endTime <= startTime) {
+        return interaction.reply({
+          content: '❌ Por favor, insira tempos válidos (tempo final deve ser maior que o inicial).',
+          ephemeral: true
+        });
+      }
+
+      if (endTime - startTime > 30) {
+        return interaction.reply({
+          content: '❌ A duração máxima é de 30 segundos.',
+          ephemeral: true
+        });
+      }
+
+      conversaoEscolha.set(interaction.channel.id, { 
+        type: 'cut-frames', 
+        startTime: startTime, 
+        endTime: endTime 
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎬 **CORTAR FRAMES SELECIONADO**')
+        .setDescription(`**Configuração:** Do segundo ${startTime} ao ${endTime} (${endTime - startTime}s)\n> Envie seu vídeo ou GIF para cortar os frames`)
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
+
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    }
+
     if (interaction.customId === 'video_download_modal') {
       const tiktokUrl = interaction.fields.getTextInputValue('tiktok_url');
       const instagramUrl = interaction.fields.getTextInputValue('instagram_url');
@@ -1235,10 +1381,10 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 \`•\` Conversão direta para GIF
 \`•\` Qualidade HD preservada
 
-<:d_arrow:1366582051507273728> TikTok → GIF
-• Cole o link do TikTok
-• Conversão direta para GIF
-• Qualidade HD preservada
+### <:d_arrow:1366582051507273728> TikTok → GIF
+\`•\` Cole o link do TikTok
+\`•\` Conversão direta para GIF
+\`•\` Qualidade HD preservada
 `)
       .setColor('#870CFF')
       .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
@@ -1267,23 +1413,36 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     );
 
     const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('youtube_to_gif')
-        .setLabel('YouTube para GIF')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('<:youtube:1386479955936022630>'),
-      new ButtonBuilder()
-        .setCustomId('download_tiktok')
-        .setLabel('Download TikTok Video')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('<:tiktok:1386523276171280495>'),
-      new ButtonBuilder()
-        .setCustomId('encerrar_thread')
-        .setLabel('Encerrar')
-        .setStyle(ButtonStyle.Danger)
-    );
+          new ButtonBuilder()
+            .setCustomId('youtube_to_gif')
+            .setLabel('YouTube para GIF')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('<:youtube:1386479955936022630>'),
+          new ButtonBuilder()
+            .setCustomId('crop_custom')
+            .setLabel('Crop Customizado')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('✂️'),
+          new ButtonBuilder()
+            .setCustomId('cut_frames')
+            .setLabel('Cortar Frames')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('🎬')
+        );
 
-    await thread.send({ content: `${user}`, embeds: [embed], components: [row, row2] });
+        const row3 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('download_tiktok')
+            .setLabel('Download TikTok Video')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('<:tiktok:1386523276171280495>'),
+          new ButtonBuilder()
+            .setCustomId('encerrar_thread')
+            .setLabel('Encerrar')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+    await thread.send({ content: `${user}`, embeds: [embed], components: [row, row2, row3] });
 
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
@@ -1373,7 +1532,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     };
 
     const embed = new EmbedBuilder()
-      .setTitle(' **OPÇÃO SELECIONADA**')
+      .setTitle('✅ **OPÇÃO SELECIONADA**')
       .setDescription(responseMessages[tipos[customId]])
       .setColor('#8804fc')
       .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
@@ -1388,6 +1547,62 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         console.log('Interação expirou, mas embed foi enviado');
       }
     }
+  }
+
+  // Handler para crop customizado
+  if (customId === 'crop_custom') {
+    const modal = new ModalBuilder()
+      .setCustomId('crop_custom_modal')
+      .setTitle('Crop Customizado');
+
+    const cropTypeInput = new TextInputBuilder()
+      .setCustomId('crop_type')
+      .setLabel('Tipo de crop (direita, esquerda, cima, baixo)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: direita, esquerda, cima, baixo')
+      .setRequired(true);
+
+    const cropAmountInput = new TextInputBuilder()
+      .setCustomId('crop_amount')
+      .setLabel('Quantidade em pixels')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 100 (para cortar 100 pixels)')
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(cropTypeInput);
+    const row2 = new ActionRowBuilder().addComponents(cropAmountInput);
+    modal.addComponents(row1, row2);
+
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // Handler para cortar frames
+  if (customId === 'cut_frames') {
+    const modal = new ModalBuilder()
+      .setCustomId('cut_frames_modal')
+      .setTitle('Cortar Frames');
+
+    const startTimeInput = new TextInputBuilder()
+      .setCustomId('start_time')
+      .setLabel('Tempo inicial (em segundos)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 2 (para começar aos 2 segundos)')
+      .setRequired(true);
+
+    const endTimeInput = new TextInputBuilder()
+      .setCustomId('end_time')
+      .setLabel('Tempo final (em segundos)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 8 (para terminar aos 8 segundos)')
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(startTimeInput);
+    const row2 = new ActionRowBuilder().addComponents(endTimeInput);
+    modal.addComponents(row1, row2);
+
+    await interaction.showModal(modal);
+    return;
   }
 
   // Handler para download TikTok
@@ -1551,8 +1766,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const idadeInput = new TextInputBuilder()
-      .setCustomId('idade')
+    const idadeInput = new TextInputBuilder()      .setCustomId('idade')
       .setLabel('Idade')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
@@ -1812,30 +2026,30 @@ GIFs: Todos os tipos (animados e estáticos)
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
       const confirmEmbed = new EmbedBuilder()
-        .setTitle('🔚 **THREAD ENCERRADA**')
+        .setTitle('🔒 **THREAD TRANCADA**')
         .setDescription(`
-> 👤 Esta thread de conversão foi encerrada por ${interaction.user}.
+> 👤 Esta thread de conversão foi trancada por ${interaction.user}.
 
-**Thread arquivada com sucesso!**
+**Thread trancada com sucesso!**
 
 \`\`\`yaml
-📊 Status: Finalizada
+📊 Status: Trancada
 👤 Solicitado por: ${interaction.user.username}
-⏰ Encerrada em: ${new Date().toLocaleString('pt-BR')}
+⏰ Trancada em: ${new Date().toLocaleString('pt-BR')}
 \`\`\`
 `)
         .setColor('#ff4444')
-        .setFooter({ text: 'GIFZADA CONVERTER PRO • Thread Finalizada' })
+        .setFooter({ text: 'GIFZADA CONVERTER PRO • Thread Trancada' })
         .setTimestamp();
 
       await interaction.reply({ embeds: [confirmEmbed] });
 
-      // Aguardar 3 segundos antes de arquivar
+      // Aguardar 3 segundos antes de trancar
       setTimeout(async () => {
         try {
-          await interaction.channel.setArchived(true);
+          await interaction.channel.setLocked(true);
         } catch (error) {
-          console.error('Erro ao arquivar thread:', error);
+          console.error('Erro ao trancar thread:', error);
         }
       }, 3000);
     } else {
@@ -1924,7 +2138,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_maker_')) {
     const userId = customId.replace('confirm_maker_', '');
-    
+
     // Buscar o membro com fetch para garantir dados atualizados
     let targetMember;
     try {
@@ -2002,7 +2216,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_postador_')) {
     const userId = customId.replace('confirm_postador_', '');
-    
+
     // Buscar o membro com fetch para garantir dados atualizados
     let targetMember;
     try {
@@ -2124,40 +2338,40 @@ client.on('messageCreate', async message => {
   if (formatosValidos[tipo] && fileExtension) {
     if (!formatosValidos[tipo].includes(fileExtension)) {
       const formatosEsperados = formatosValidos[tipo].join(', ');
-      
+
       const errorEmbed = new EmbedBuilder()
-        .setTitle(' **FORMATO INCORRETO**')
+        .setTitle('❌ **FORMATO INCORRETO**')
         .setDescription(`
 ╭─────────────────────────────────╮
 │   **Formato não compatível!**   │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Conversão Selecionada: ${tipo.toUpperCase()}
- Arquivo Enviado: ${file.name}
- Formato Detectado: ${fileExtension}
- Formatos Esperados: ${formatosEsperados}
+🎯 Conversão Selecionada: ${tipo.toUpperCase()}
+📁 Arquivo Enviado: ${file.name}
+❌ Formato Detectado: ${fileExtension}
+✅ Formatos Esperados: ${formatosEsperados}
 \`\`\`
 
-##  **O QUE FAZER:**
+## 💡 **O QUE FAZER:**
 
 ${tipo === 'video-to-gif' ? 
-  `###  **Para Vídeo → GIF:**
+  `### 🎬 **Para Vídeo → GIF:**
    \`•\` Envie um arquivo de **vídeo**
    \`•\` Formatos aceitos: **MP4, AVI, MOV, WMV, MKV, WEBM**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` : 
   tipo === 'resize-gif' ?
-  `###  **Para Redimensionar GIF:**
+  `### 🔄 **Para Redimensionar GIF:**
    \`•\` Envie um arquivo **GIF animado**
    \`•\` Formato aceito: **GIF**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` :
-  `###  **Para Cortar Imagem:**
+  `### ✂️ **Para Cortar Imagem:**
    \`•\` Envie uma **imagem** ou **GIF**
    \`•\` Formatos aceitos: **PNG, JPG, JPEG, GIF, WEBP, BMP**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**`
 }
 
->  **Envie o arquivo correto ou escolha uma nova opção de conversão**
+> 🔄 **Envie o arquivo correto ou escolha uma nova opção de conversão**
 `)
         .setColor('#ff4444')
         .setFooter({ text: 'Verifique o formato do arquivo e tente novamente' })
@@ -2170,17 +2384,17 @@ ${tipo === 'video-to-gif' ?
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
-    .setTitle(' **PROCESSAMENTO EM ANDAMENTO**')
+    .setTitle('⏳ **PROCESSAMENTO EM ANDAMENTO**')
     .setDescription(`
 ╭─────────────────────────────────╮
 │   **Analisando seu arquivo...**  │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Arquivo: ${file.name}
- Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
- Tipo: ${tipo.toUpperCase()}
- Status: Iniciando processamento...
+📁 Arquivo: ${file.name}
+📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+🎯 Tipo: ${tipo.toUpperCase()}
+⏱️ Status: Iniciando processamento...
 \`\`\`
 
 **PROGRESSO:**
@@ -2188,7 +2402,7 @@ ${tipo === 'video-to-gif' ?
 
 `)
     .setColor('#ffaa00')
-    .setFooter({ text: ' Sistema de conversão gifzada' })
+    .setFooter({ text: '⚡ Sistema de conversão gifzada' })
     .setTimestamp();
 
   const aguardandoMsg = await message.channel.send({ embeds: [processEmbed] });
@@ -2202,10 +2416,10 @@ ${tipo === 'video-to-gif' ?
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
- Arquivo: ${file.name}
- Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
- Tipo: ${tipo.toUpperCase()}
- Status: Convertendo...
+📁 Arquivo: ${file.name}
+📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+🎯 Tipo: ${tipo.toUpperCase()}
+⏱️ Status: Convertendo...
 \`\`\`
 
 **PROGRESSO:**
@@ -2225,10 +2439,10 @@ ${tipo === 'video-to-gif' ?
 
     if (originalSizeMB > maxInputSize) {
       await aguardandoMsg.edit({
-        content: ` **Arquivo de entrada muito grande!**\n\n` +
-                ` **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
-                ` **Limite:** ${maxInputSize} MB\n\n` +
-                ` **Dica:** Use um arquivo menor como entrada.`,
+        content: `❌ **Arquivo de entrada muito grande!**\n\n` +
+                `📊 **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
+                `📋 **Limite:** ${maxInputSize} MB\n\n` +
+                `💡 **Dica:** Use um arquivo menor como entrada.`,
         embeds: []
       });
       conversaoEscolha.delete(message.channel.id);
@@ -2246,10 +2460,10 @@ ${tipo === 'video-to-gif' ?
 
     if (fileSizeMB > maxOutputSize) {
       await aguardandoMsg.edit({
-        content: ` **Arquivo convertido muito grande!**\n\n` +
-                ` **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                ` **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                ` **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
+        content: `❌ **Arquivo convertido muito grande!**\n\n` +
+                `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
+                `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
+                `💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
         embeds: []
       });
 
@@ -2345,8 +2559,7 @@ ${tipo === 'video-to-gif' ?
     // Então enviar o resultado final completamente limpo
     await aguardandoMsg.edit({ 
       content: `${message.author} **Sua conversão está pronta!**`, 
-      embeds: [resultEmbed], 
-      files: [attachment],
+      embeds: [resultEmbed],       files: [attachment],
       components: []
     });
 
@@ -2510,6 +2723,119 @@ async function processFile(attachment, type, percentage = null) {
           temporarios: [] 
         };
       }
+    }
+
+    case 'crop-custom': {
+      const response = await fetch(attachment.url);
+      const buffer = await response.buffer();
+      const { cropType, cropAmount } = percentage || {};
+
+      const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
+
+      if (isGif) {
+        const inputPath = `input_${nomeBase}.gif`;
+        const outputPath = `output_${nomeBase}.gif`;
+        fs.writeFileSync(inputPath, buffer);
+        temporarios.push(inputPath, outputPath);
+
+        const metadata = await sharp(buffer, { animated: false }).metadata();
+        const { width, height } = metadata;
+
+        let cropArgs;
+        switch (cropType) {
+          case 'direita':
+            cropArgs = `0,0+${width - cropAmount}x${height}`;
+            break;
+          case 'esquerda':
+            cropArgs = `${cropAmount},0+${width - cropAmount}x${height}`;
+            break;
+          case 'cima':
+            cropArgs = `0,${cropAmount}+${width}x${height - cropAmount}`;
+            break;
+          case 'baixo':
+            cropArgs = `0,0+${width}x${height - cropAmount}`;
+            break;
+          default:
+            throw new Error('Tipo de crop inválido');
+        }
+
+        await new Promise((resolve, reject) => {
+          execFile(gifsicle, [
+            '--crop', cropArgs,
+            inputPath, 
+            '-o', outputPath
+          ], err => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+
+        const croppedGif = fs.readFileSync(outputPath);
+        return { buffer: croppedGif, name: `crop_${cropType}.gif`, temporarios };
+      } else {
+        const extension = attachment.name.split('.').pop().toLowerCase();
+        const metadata = await sharp(buffer).metadata();
+        const { width, height } = metadata;
+
+        let extractOptions;
+        switch (cropType) {
+          case 'direita':
+            extractOptions = { left: 0, top: 0, width: width - cropAmount, height: height };
+            break;
+          case 'esquerda':
+            extractOptions = { left: cropAmount, top: 0, width: width - cropAmount, height: height };
+            break;
+          case 'cima':
+            extractOptions = { left: 0, top: cropAmount, width: width, height: height - cropAmount };
+            break;
+          case 'baixo':
+            extractOptions = { left: 0, top: 0, width: width, height: height - cropAmount };
+            break;
+          default:
+            throw new Error('Tipo de crop inválido');
+        }
+
+        const croppedImage = await sharp(buffer)
+          .extract(extractOptions)
+          .toBuffer();
+
+        return { 
+          buffer: croppedImage, 
+          name: `crop_${cropType}.${extension || 'png'}`, 
+          temporarios: [] 
+        };
+      }
+    }
+
+    case 'cut-frames': {
+      const { startTime, endTime } = percentage || {};
+      const response = await fetch(attachment.url);
+      const buffer = await response.buffer();
+      const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
+      
+      const tempInput = `cut_input_${nomeBase}${fileExtension}`;
+      const tempOutput = `cut_output_${nomeBase}.gif`;
+      fs.writeFileSync(tempInput, buffer);
+      temporarios.push(tempInput, tempOutput);
+
+      const duration = endTime - startTime;
+
+      await new Promise((resolve, reject) => {
+        ffmpeg(tempInput)
+          .setStartTime(startTime)
+          .setDuration(duration)
+          .outputOptions([
+            '-vf', 'scale=480:-1:flags=lanczos,fps=30',
+            '-pix_fmt', 'rgb24'
+          ])
+          .toFormat('gif')
+          .on('end', resolve)
+          .on('error', reject)
+          .save(tempOutput);
+      });
+
+      const cutGif = fs.readFileSync(tempOutput);
+      return { buffer: cutGif, name: `frames_${startTime}s-${endTime}s.gif`, temporarios };
     }
 
     case 'youtube-to-gif':
@@ -2778,6 +3104,211 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
     });
     throw error;
   }
+}
+
+// Função para gerar profile card com Canvas
+async function generateProfileCard(user, member, guild) {
+  // Dimensões do card
+  const width = 800;
+  const height = 400;
+  
+  // Criar canvas
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+
+  // Criar gradiente de fundo
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, '#667eea');
+  gradient.addColorStop(1, '#764ba2');
+  
+  // Desenhar fundo
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  // Adicionar padrão de fundo sutil
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+  for (let i = 0; i < width; i += 40) {
+    for (let j = 0; j < height; j += 40) {
+      ctx.fillRect(i, j, 20, 20);
+    }
+  }
+
+  // Carregar avatar do usuário
+  let avatarImage;
+  try {
+    const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 256 });
+    avatarImage = await loadImage(avatarUrl);
+  } catch (error) {
+    console.error('Erro ao carregar avatar:', error);
+    // Usar avatar padrão do Discord se falhar
+    avatarImage = await loadImage('https://cdn.discordapp.com/embed/avatars/0.png');
+  }
+
+  // Desenhar círculo do avatar
+  const avatarSize = 120;
+  const avatarX = 80;
+  const avatarY = height / 2 - avatarSize / 2;
+
+  // Criar máscara circular para o avatar
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+
+  // Desenhar avatar
+  ctx.drawImage(avatarImage, avatarX, avatarY, avatarSize, avatarSize);
+  ctx.restore();
+
+  // Desenhar borda do avatar
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Configurar texto
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'left';
+
+  // Nome do usuário
+  ctx.font = 'bold 36px Arial';
+  ctx.fillText(user.username, 240, 120);
+
+  // Discriminator (se existir)
+  if (user.discriminator && user.discriminator !== '0') {
+    ctx.font = '24px Arial';
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText(`#${user.discriminator}`, 240, 150);
+  }
+
+  // ID do usuário
+  ctx.font = '18px Arial';
+  ctx.fillStyle = '#dddddd';
+  ctx.fillText(`ID: ${user.id}`, 240, 180);
+
+  // Data de entrada no servidor
+  if (member.joinedAt) {
+    ctx.fillText(`Entrou em: ${member.joinedAt.toLocaleDateString('pt-BR')}`, 240, 205);
+  }
+
+  // Conta criada em
+  ctx.fillText(`Conta criada: ${user.createdAt.toLocaleDateString('pt-BR')}`, 240, 230);
+
+  // Status do usuário
+  const presence = member.presence;
+  let statusColor = '#747f8d'; // offline/invisible
+  let statusText = 'Offline';
+
+  if (presence) {
+    switch (presence.status) {
+      case 'online':
+        statusColor = '#43b581';
+        statusText = 'Online';
+        break;
+      case 'idle':
+        statusColor = '#faa61a';
+        statusText = 'Ausente';
+        break;
+      case 'dnd':
+        statusColor = '#f04747';
+        statusText = 'Não Perturbe';
+        break;
+    }
+  }
+
+  // Desenhar indicador de status
+  ctx.fillStyle = statusColor;
+  ctx.beginPath();
+  ctx.arc(255, 265, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '20px Arial';
+  ctx.fillText(statusText, 275, 270);
+
+  // Cargos do usuário (máximo 3 principais)
+  const roles = member.roles.cache
+    .filter(role => role.name !== '@everyone')
+    .sort((a, b) => b.position - a.position)
+    .first(3);
+
+  if (roles.length > 0) {
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText('Principais Cargos:', 240, 310);
+
+    let yOffset = 335;
+    roles.forEach((role, index) => {
+      // Desenhar retângulo do cargo
+      ctx.fillStyle = role.hexColor || '#99aab5';
+      ctx.fillRect(240, yOffset - 15, 20, 15);
+
+      // Nome do cargo
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '16px Arial';
+      ctx.fillText(role.name, 270, yOffset - 3);
+
+      yOffset += 25;
+    });
+  }
+
+  // Estatísticas (lado direito)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillRect(width - 200, 50, 180, 300);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('ESTATÍSTICAS', width - 110, 80);
+
+  ctx.font = '16px Arial';
+  ctx.textAlign = 'left';
+  
+  // Número de cargos
+  const roleCount = member.roles.cache.size - 1; // -1 para excluir @everyone
+  ctx.fillText(`🏷️ Cargos: ${roleCount}`, width - 190, 120);
+
+  // Tempo no servidor
+  if (member.joinedAt) {
+    const daysSinceJoined = Math.floor((Date.now() - member.joinedAt.getTime()) / (1000 * 60 * 60 * 24));
+    ctx.fillText(`📅 Dias aqui: ${daysSinceJoined}`, width - 190, 150);
+  }
+
+  // Permissões especiais
+  const hasAdminPerms = member.permissions.has('Administrator');
+  const hasModPerms = member.permissions.has(['KickMembers', 'BanMembers']);
+  
+  if (hasAdminPerms) {
+    ctx.fillText('👑 Administrator', width - 190, 180);
+  } else if (hasModPerms) {
+    ctx.fillText('🛡️ Moderador', width - 190, 180);
+  } else {
+    ctx.fillText('👤 Membro', width - 190, 180);
+  }
+
+  // Boost do servidor
+  if (member.premiumSince) {
+    const boostDays = Math.floor((Date.now() - member.premiumSince.getTime()) / (1000 * 60 * 60 * 24));
+    ctx.fillText(`💎 Boost: ${boostDays}d`, width - 190, 210);
+  }
+
+  // Ícone do servidor (pequeno, no canto)
+  try {
+    if (guild.iconURL()) {
+      const guildIcon = await loadImage(guild.iconURL({ extension: 'png', size: 64 }));
+      ctx.drawImage(guildIcon, width - 80, height - 80, 60, 60);
+    }
+  } catch (error) {
+    console.error('Erro ao carregar ícone do servidor:', error);
+  }
+
+  // Marca d'água
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.font = '12px Arial';
+  ctx.textAlign = 'right';
+  ctx.fillText('GIFZADA Profile Card', width - 20, height - 20);
+
+  return canvas.toBuffer('image/png');
 }
 
 client.login(process.env.TOKEN);
