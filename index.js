@@ -12,30 +12,18 @@ const {
   TextInputStyle
 } = require('discord.js');
 const fs = require('fs');
-// Using built-in fetch (Node.js 18+)
+const fetch = require('node-fetch');
 const sharp = require('sharp');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 ffmpeg.setFfmpegPath(ffmpegPath); 
 const { execFile } = require('child_process');
+const gifsicle = require('gifsicle');
 const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const db = require('./database.js');
 require('dotenv').config();
-
-// Tratamento de erros não capturados para evitar crashes
-process.on('uncaughtException', (error) => {
-  console.error('Erro não capturado:', error);
-  // Não encerrar o processo, apenas logar
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Promise rejeitada não tratada:', reason);
-  // Não encerrar o processo, apenas logar
-});
 
 // Criar servidor HTTP
 const app = express();
@@ -61,14 +49,6 @@ const conversaoEscolha = new Map();
 
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
-
-  // Conectar ao MongoDB com tratamento de erro
-  try {
-    await db.connect();
-  } catch (error) {
-    console.error('Erro ao conectar MongoDB:', error);
-    // Continuar mesmo sem MongoDB para evitar crash
-  }
 
   // Registrar comandos slash
   const commands = [
@@ -359,384 +339,7 @@ client.on('messageCreate', async message => {
     await message.channel.send({ embeds: [embed], components: [suporteRow] });
   }
 
-  if (message.content === '!background' || message.content.startsWith('!background ')) {
-    // Verificar se o usuário tem permissão (pode ajustar conforme necessário)
-    const authorizedRoles = [
-      '1388321897040842853',
-      '1065441745875243008',
-      '1386492093303885907',
-      '1317652394351525959',
-      '1386493660010516693',
-      '1065441744726020126',
-      '1065441743379628043',
-      '1065441742301704202',
-      '1094385139976507523'
-    ];
-
-    const hasAuthorizedRole = message.member.roles.cache.some(role => authorizedRoles.includes(role.id));
-
-    if (!hasAuthorizedRole) {
-      return message.reply('❌ Você não tem permissão para alterar o background padrão do servidor.');
-    }
-
-    const args = message.content.split(' ');
-
-    if (args.length === 1) {
-      // Mostrar background atual
-      const currentBg = await db.getServerConfig(message.guild.id, 'default_background') || 'padrão';
-      return message.reply(`📸 **Background padrão do servidor:** ${currentBg === 'padrão' ? 'Gradiente padrão' : currentBg}`);
-    }
-
-    const backgroundUrl = args[1];
-
-    // Validar se é uma URL válida
-    try {
-      new URL(backgroundUrl);
-    } catch (error) {
-      return message.reply('❌ URL inválida! Use: `!background https://exemplo.com/imagem.png`');
-    }
-
-    // Testar se a imagem pode ser carregada
-    try {
-      const response = await fetch(backgroundUrl);
-      if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
-        return message.reply('❌ URL não é uma imagem válida!');
-      }
-
-      // Salvar no banco de dados
-      await db.setServerConfig(message.guild.id, 'default_background', backgroundUrl);
-
-      const successEmbed = new EmbedBuilder()
-        .setTitle('✅ **BACKGROUND PADRÃO ATUALIZADO**')
-        .setDescription(`
-🖼️ **Novo background padrão definido com sucesso!**
-
-**URL:** ${backgroundUrl}
-
-> 🎨 *Todos os próximos profile cards usarão este background como padrão*
-`)
-        .setColor('#00ff88')
-        .setImage(backgroundUrl)
-        .setTimestamp();
-
-      await message.reply({ embeds: [successEmbed] });
-
-    } catch (error) {
-      console.error('Erro ao validar background:', error);
-      await message.reply('❌ Erro ao carregar a imagem. Verifique se a URL está correta.');
-    }
-  }
-
-  if (message.content.startsWith('!sobremim ')) {
-    const newMessage = message.content.slice(10); // Remove "!sobremim "
-    
-    if (!newMessage || newMessage.length < 1) {
-      return message.reply('❌ Digite uma mensagem! Exemplo: `!sobremim Amo fazer GIFs!`');
-    }
-
-    if (newMessage.length > 100) {
-      return message.reply('❌ A mensagem deve ter no máximo 100 caracteres!');
-    }
-
-    try {
-      await db.setSobremim(message.author.id, message.guild.id, newMessage);
-      
-      const successEmbed = new EmbedBuilder()
-        .setTitle('✅ **SOBRE MIM ATUALIZADO**')
-        .setDescription(`
-📝 **Sua mensagem foi salva com sucesso!**
-
-**Nova mensagem:** ${newMessage}
-
-> 💫 *Aparecerá no seu profile card!*
-`)
-        .setColor('#00ff88')
-        .setTimestamp();
-
-      await message.reply({ embeds: [successEmbed] });
-    } catch (error) {
-      console.error('Erro ao salvar sobremim:', error);
-      await message.reply('❌ Erro ao salvar sua mensagem. Tente novamente.');
-    }
-  }
-
-  if (message.content === '!profile') {
-    // Verificar se o usuário mencionou alguém ou usar o próprio usuário
-    const targetUser = message.mentions.users.first() || message.author;
-    const targetMember = message.guild.members.cache.get(targetUser.id);
-
-    if (!targetMember) {
-      return message.reply('❌ Usuário não encontrado no servidor.');
-    }
-
-    try {
-      // Criar mensagem de carregamento
-      const loadingEmbed = new EmbedBuilder()
-        .setTitle('🎨 **GERANDO PROFILE CARD**')
-        .setDescription(`
-\`\`\`yaml
-👤 Usuário: ${targetUser.username}
-🎨 Status: Criando card personalizado...
-⏱️ Progresso: Carregando dados do banco...
-\`\`\`
-
-> 🖼️ *Aguarde enquanto criamos seu card de perfil!*
-`)
-        .setColor('#9c41ff')
-        .setTimestamp();
-
-      const loadingMsg = await message.channel.send({ embeds: [loadingEmbed] });
-
-      // Gerar o profile card com tratamento de erro melhorado
-      try {
-        const profileCardBuffer = await generateProfileCard(targetUser, targetMember, message.guild);
-        const attachment = new AttachmentBuilder(profileCardBuffer, { name: `profile_${targetUser.id}.png` });
-
-        await loadingMsg.edit({
-          content: '',
-          embeds: [],
-          files: [attachment]
-        });
-      } catch (cardError) {
-        console.error('Erro específico do profile card:', cardError);
-        
-        // Enviar embed simples sem imagem
-        const errorEmbed = new EmbedBuilder()
-          .setTitle('📊 **PROFILE STATS**')
-          .setDescription(`
-**Usuário:** ${targetUser.username}
-**Meta:** Carregando...
-**Entregas:** Carregando...
-**Dinheiro:** Carregando...
-
-> ⚠️ *Profile card temporariamente indisponível*
-`)
-          .setColor('#ff9900')
-          .setTimestamp();
-
-        await loadingMsg.edit({
-          content: '',
-          embeds: [errorEmbed]
-        });
-      }
-
-    } catch (error) {
-      console.error('Erro geral ao processar profile:', error);
-      await message.reply('❌ Erro ao processar perfil. Tente novamente mais tarde.');
-    }
-  }
-
-  // Sistema automático de pontos por entregas
-  // Detectar links de mensagens do Discord para dar pontos automaticamente
-  const discordMessageLinkRegex = /https:\/\/(?:discord\.com|discordapp\.com)\/channels\/(\d+)\/(\d+)\/(\d+)/g;
-  const messageLinks = message.content.match(discordMessageLinkRegex);
-
-  if (messageLinks && messageLinks.length > 0) {
-    // Configuração de pontos por canal
-    const pontosConfig = {
-      '1182331070750933073': 2, // Servidor conexão - canal padrão
-      '1329894869421920390': 4, // Canal que dá 4 pontos  
-      '1329894956503924839': 3  // Canal que dá 3 pontos
-    };
-
-    let totalPontos = 0;
-    const canaisDetectados = [];
-
-    // Processar cada link encontrado
-    for (const link of messageLinks) {
-      const match = link.match(/\/channels\/(\d+)\/(\d+)\/(\d+)/);
-      if (match) {
-        const [, guildId, channelId, messageId] = match;
-        
-        // Verificar se o canal está na configuração
-        if (pontosConfig[channelId]) {
-          const pontos = pontosConfig[channelId];
-          totalPontos += pontos;
-          canaisDetectados.push({ channelId, pontos });
-        }
-      }
-    }
-
-    // Se encontrou pontos para dar
-    if (totalPontos > 0) {
-      try {
-        // SEMPRE salvar no servidor oficial (953748240589787136)
-        const servidorOficial = '953748240589787136';
-        
-        // Atualizar meta no banco do servidor oficial
-        await db.updateMeta(message.author.id, servidorOficial, totalPontos);
-        
-        // Buscar dados atualizados do usuário
-        const profile = await db.getUserProfile(message.author.id, servidorOficial);
-        
-        // Buscar o membro no servidor oficial para verificar cargo
-        let targetMember = null;
-        try {
-          const oficialGuild = client.guilds.cache.get(servidorOficial);
-          if (oficialGuild) {
-            targetMember = await oficialGuild.members.fetch(message.author.id);
-          }
-        } catch (error) {
-          console.log('Usuário não encontrado no servidor oficial');
-        }
-        
-        // Se não conseguir buscar o membro, usar valores padrão
-        const metaInfo = targetMember ? 
-          db.getMetaInfoByCargo(targetMember) : 
-          { nivel: 'Iniciante', max: 20, cor: '#d2a8ff' };
-
-        // Criar embed de confirmação
-        const embed = new EmbedBuilder()
-          .setTitle('✅ **PONTOS AUTOMÁTICOS ADICIONADOS**')
-          .setDescription(`
-🎯 **Entrega detectada!** Pontos adicionados automaticamente.
-
-**Usuário:** ${message.author}
-**Pontos ganhos:** +${totalPontos}
-**Meta atual:** ${profile.meta}/${metaInfo.max}
-**Nível:** Meta ${metaInfo.nivel}
-
-**Detalhes da entrega:**
-${canaisDetectados.map(canal => `• Canal <#${canal.channelId}>: +${canal.pontos} pontos`).join('\n')}
-
-> 💾 *Dados salvos no servidor oficial*
-`)
-          .setColor('#00ff88')
-          .setTimestamp();
-
-        await message.reply({ embeds: [embed] });
-
-      } catch (error) {
-        console.error('Erro ao processar pontos automáticos:', error);
-        await message.reply('❌ Erro ao processar pontos da entrega. Tente novamente.');
-      }
-    }
-  }
-
-  if (message.content.startsWith('!addentrega ') || message.content.startsWith('!removeentrega ')) {
-    const isAdd = message.content.startsWith('!addentrega ');
-    const command = isAdd ? '!addentrega ' : '!removeentrega ';
-    
-    // Verificar permissões (apenas staff)
-    const staffRoleId = '1094385139976507523';
-    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
-
-    if (!hasStaffRole) {
-      return message.reply('❌ Apenas membros da staff podem gerenciar entregas.');
-    }
-
-    const args = message.content.slice(command.length).split(' ');
-    if (args.length < 2) {
-      return message.reply(`❌ Use: \`${command}<@usuário> <quantidade>\``);
-    }
-
-    const targetUser = message.mentions.users.first();
-    const amount = parseInt(args[1]);
-
-    if (!targetUser) {
-      return message.reply('❌ Mencione um usuário válido!');
-    }
-
-    if (isNaN(amount) || amount <= 0) {
-      return message.reply('❌ Digite uma quantidade válida!');
-    }
-
-    try {
-      if (isAdd) {
-        await db.updateEntregas(targetUser.id, message.guild.id, amount);
-      } else {
-        await db.updateEntregas(targetUser.id, message.guild.id, -amount);
-      }
-
-      const profile = await db.getUserProfile(targetUser.id, message.guild.id);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`✅ **ENTREGAS ${isAdd ? 'ADICIONADAS' : 'REMOVIDAS'}**`)
-        .setDescription(`
-**Usuário:** ${targetUser}
-**${isAdd ? 'Adicionado' : 'Removido'}:** ${amount} entregas
-**Entregas totais:** ${profile.entregas}
-`)
-        .setColor(isAdd ? '#00ff88' : '#ff8800')
-        .setTimestamp();
-
-      await message.reply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Erro ao gerenciar entregas:', error);
-      await message.reply('❌ Erro ao atualizar entregas. Tente novamente.');
-    }
-  }
-
-  if (message.content.startsWith('!adddinheiro ') || message.content.startsWith('!removedinheiro ')) {
-    const isAdd = message.content.startsWith('!adddinheiro ');
-    const command = isAdd ? '!adddinheiro ' : '!removedinheiro ';
-    
-    // Verificar permissões (apenas staff)
-    const staffRoleId = '1094385139976507523';
-    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
-
-    if (!hasStaffRole) {
-      return message.reply('❌ Apenas membros da staff podem gerenciar dinheiro.');
-    }
-
-    const args = message.content.slice(command.length).split(' ');
-    if (args.length < 2) {
-      return message.reply(`❌ Use: \`${command}<@usuário> <quantidade>\``);
-    }
-
-    const targetUser = message.mentions.users.first();
-    const amount = parseInt(args[1]);
-
-    if (!targetUser) {
-      return message.reply('❌ Mencione um usuário válido!');
-    }
-
-    if (isNaN(amount) || amount <= 0) {
-      return message.reply('❌ Digite uma quantidade válida!');
-    }
-
-    try {
-      if (isAdd) {
-        await db.updateDinheiro(targetUser.id, message.guild.id, amount);
-      } else {
-        await db.updateDinheiro(targetUser.id, message.guild.id, -amount);
-      }
-
-      const profile = await db.getUserProfile(targetUser.id, message.guild.id);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`✅ **DINHEIRO ${isAdd ? 'ADICIONADO' : 'REMOVIDO'}**`)
-        .setDescription(`
-**Usuário:** ${targetUser}
-**${isAdd ? 'Adicionado' : 'Removido'}:** ${amount}
-**Dinheiro total:** ${profile.dinheiro}
-`)
-        .setColor(isAdd ? '#00ff88' : '#ff8800')
-        .setTimestamp();
-
-      await message.reply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Erro ao gerenciar dinheiro:', error);
-      await message.reply('❌ Erro ao atualizar dinheiro. Tente novamente.');
-    }
-  }
-
   if (message.content === '!converter') {
-    // Contar threads de conversão no canal
-    const threadsCollection = await message.channel.threads.fetchActive();
-    const archivedThreads = await message.channel.threads.fetchArchived({ limit: 100 });
-
-    // Filtrar apenas threads de conversão (que começam com 🎞️)
-    const activeConversionThreads = threadsCollection.threads.filter(thread => 
-      thread.name.includes('Conversão') || thread.name.includes('🎞️')
-    ).size;
-
-    const archivedConversionThreads = archivedThreads.threads.filter(thread => 
-      thread.name.includes('Conversão') || thread.name.includes('🎞️')
-    ).size;
-
-    const totalThreads = activeConversionThreads + archivedConversionThreads;
-
     const embed = new EmbedBuilder()
       .setTitle('<:a_gifzada:1266774740115132468> **GIFZADA CONVERSOR**')
       .setDescription(`
@@ -776,10 +379,11 @@ ${canaisDetectados.map(canal => `• Canal <#${canal.channelId}>: +${canal.ponto
 \`•\` Conversão automática para GIF
 \`•\` Qualidade HD preservada
 
-### <:d_arrow:1366582051507273728> TikTok → GIF
-\`•\` Cole o link do TikTok
-\`•\` Conversão direta para GIF
-\`•\` Qualidade HD preservada
+## <:d_tag:1366581862004166656> **ESTATÍSTICAS EM TEMPO REAL:**
+\`•\`  Velocidade: **3x mais rápido**
+\`•\`  Precisão: **99.9% de sucesso**
+\`•\`  Economia: **Até 80% menor**
+\`•\`  Formatos: **15+ suportados**
 `)
       .setThumbnail('https://cdn.discordapp.com/icons/953748240589787136/a_85b194eaf3055cfc583d70b3b14cbaa5.gif?size=2048')
       .setColor('#870cff')
@@ -1516,73 +1120,6 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       }
     }
 
-    if (interaction.customId === 'crop_custom_modal') {
-      const cropType = interaction.fields.getTextInputValue('crop_type').toLowerCase();
-      const cropAmount = parseInt(interaction.fields.getTextInputValue('crop_amount'));
-
-      if (isNaN(cropAmount) || cropAmount < 1) {
-        return interaction.reply({
-          content: '❌ Por favor, insira uma quantidade válida em pixels.',
-          ephemeral: true
-        });
-      }
-
-      const validTypes = ['direita', 'esquerda', 'cima', 'baixo'];
-      if (!validTypes.includes(cropType)) {
-        return interaction.reply({
-          content: '❌ Tipo de crop inválido. Use: direita, esquerda, cima ou baixo.',
-          ephemeral: true
-        });
-      }
-
-      conversaoEscolha.set(interaction.channel.id, { 
-        type: 'crop-custom', 
-        cropType: cropType, 
-        cropAmount: cropAmount 
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle('✂️ **CROP CUSTOMIZADO SELECIONADO**')
-        .setDescription(`**Configuração:** Cortar ${cropAmount}px da ${cropType}\n> Envie sua imagem ou GIF para aplicar o crop`)
-        .setColor('#8804fc')
-        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
-
-      await interaction.reply({ embeds: [embed], ephemeral: false });
-    }
-
-    if (interaction.customId === 'cut_frames_modal') {
-      const startTime = parseFloat(interaction.fields.getTextInputValue('start_time'));
-      const endTime = parseFloat(interaction.fields.getTextInputValue('end_time'));
-
-      if (isNaN(startTime) || isNaN(endTime) || startTime < 0 || endTime <= startTime) {
-        return interaction.reply({
-          content: '❌ Por favor, insira tempos válidos (tempo final deve ser maior que o inicial).',
-          ephemeral: true
-        });
-      }
-
-      if (endTime - startTime > 30) {
-        return interaction.reply({
-          content: '❌ A duração máxima é de 30 segundos.',
-          ephemeral: true
-        });
-      }
-
-      conversaoEscolha.set(interaction.channel.id, { 
-        type: 'cut-frames', 
-        startTime: startTime, 
-        endTime: endTime 
-      });
-
-      const embed = new EmbedBuilder()
-        .setTitle('🎬 **CORTAR FRAMES SELECIONADO**')
-        .setDescription(`**Configuração:** Do segundo ${startTime} ao ${endTime} (${endTime - startTime}s)\n> Envie seu vídeo ou GIF para cortar os frames`)
-        .setColor('#8804fc')
-        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
-
-      await interaction.reply({ embeds: [embed], ephemeral: false });
-    }
-
     if (interaction.customId === 'video_download_modal') {
       const tiktokUrl = interaction.fields.getTextInputValue('tiktok_url');
       const instagramUrl = interaction.fields.getTextInputValue('instagram_url');
@@ -1697,10 +1234,10 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 \`•\` Conversão direta para GIF
 \`•\` Qualidade HD preservada
 
-### <:d_arrow:1366582051507273728> TikTok → GIF
-\`•\` Cole o link do TikTok
-\`•\` Conversão direta para GIF
-\`•\` Qualidade HD preservada
+<:d_arrow:1366582051507273728> TikTok → GIF
+• Cole o link do TikTok
+• Conversão direta para GIF
+• Qualidade HD preservada
 `)
       .setColor('#870CFF')
       .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
@@ -1729,36 +1266,23 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     );
 
     const row2 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('youtube_to_gif')
-            .setLabel('YouTube para GIF')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('<:youtube:1386479955936022630>'),
-          new ButtonBuilder()
-            .setCustomId('crop_custom')
-            .setLabel('Crop Customizado')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-          new ButtonBuilder()
-            .setCustomId('cut_frames')
-            .setLabel('Cortar Frames')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true)
-        );
+      new ButtonBuilder()
+        .setCustomId('youtube_to_gif')
+        .setLabel('YouTube para GIF')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('<:youtube:1386479955936022630>'),
+      new ButtonBuilder()
+        .setCustomId('download_tiktok')
+        .setLabel('Download TikTok Video')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('<:tiktok:1386523276171280495>'),
+      new ButtonBuilder()
+        .setCustomId('encerrar_thread')
+        .setLabel('Encerrar')
+        .setStyle(ButtonStyle.Danger)
+    );
 
-        const row3 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('download_tiktok')
-            .setLabel('Download TikTok Video')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji('<:tiktok:1386523276171280495>'),
-          new ButtonBuilder()
-            .setCustomId('encerrar_thread')
-            .setLabel('Encerrar')
-            .setStyle(ButtonStyle.Danger)
-        );
-
-    await thread.send({ content: `${user}`, embeds: [embed], components: [row, row2, row3] });
+    await thread.send({ content: `${user}`, embeds: [embed], components: [row, row2] });
 
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
@@ -1848,7 +1372,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     };
 
     const embed = new EmbedBuilder()
-      .setTitle('✅ **OPÇÃO SELECIONADA**')
+      .setTitle(' **OPÇÃO SELECIONADA**')
       .setDescription(responseMessages[tipos[customId]])
       .setColor('#8804fc')
       .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
@@ -1863,62 +1387,6 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         console.log('Interação expirou, mas embed foi enviado');
       }
     }
-  }
-
-  // Handler para crop customizado
-  if (customId === 'crop_custom') {
-    const modal = new ModalBuilder()
-      .setCustomId('crop_custom_modal')
-      .setTitle('Crop Customizado');
-
-    const cropTypeInput = new TextInputBuilder()
-      .setCustomId('crop_type')
-      .setLabel('Tipo de crop (direita, esquerda, cima, baixo)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: direita, esquerda, cima, baixo')
-      .setRequired(true);
-
-    const cropAmountInput = new TextInputBuilder()
-      .setCustomId('crop_amount')
-      .setLabel('Quantidade em pixels')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 100 (para cortar 100 pixels)')
-      .setRequired(true);
-
-    const row1 = new ActionRowBuilder().addComponents(cropTypeInput);
-    const row2 = new ActionRowBuilder().addComponents(cropAmountInput);
-    modal.addComponents(row1, row2);
-
-    await interaction.showModal(modal);
-    return;
-  }
-
-  // Handler para cortar frames
-  if (customId === 'cut_frames') {
-    const modal = new ModalBuilder()
-      .setCustomId('cut_frames_modal')
-      .setTitle('Cortar Frames');
-
-    const startTimeInput = new TextInputBuilder()
-      .setCustomId('start_time')
-      .setLabel('Tempo inicial (em segundos)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 2 (para começar aos 2 segundos)')
-      .setRequired(true);
-
-    const endTimeInput = new TextInputBuilder()
-      .setCustomId('end_time')
-      .setLabel('Tempo final (em segundos)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Ex: 8 (para terminar aos 8 segundos)')
-      .setRequired(true);
-
-    const row1 = new ActionRowBuilder().addComponents(startTimeInput);
-    const row2 = new ActionRowBuilder().addComponents(endTimeInput);
-    modal.addComponents(row1, row2);
-
-    await interaction.showModal(modal);
-    return;
   }
 
   // Handler para download TikTok
@@ -2082,7 +1550,8 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const idadeInput = new TextInputBuilder()      .setCustomId('idade')
+    const idadeInput = new TextInputBuilder()
+      .setCustomId('idade')
       .setLabel('Idade')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
@@ -2201,6 +1670,9 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     // Se for ticket de maker, enviar para apadrinhamento
     if (customId === 'fechar_ticket_maker') {
       try {
+        // Buscar as informações do maker na thread
+        const messages = await interaction.channel.messages.fetch({ limit: 10 });
+        const makerMessage = messages.find(msg => msg.embeds.length > 0 && msg.embeds[0].title?.includes('SEJA MAKER'));
         // Buscar todas as mensagens da thread para encontrar a embed do maker
         const messages = await interaction.channel.messages.fetch({ limit: 50 });
         const makerMessage = messages.find(msg => 
@@ -2213,6 +1685,11 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
           const embed = makerMessage.embeds[0];
           const description = embed.description;
 
+          // Extrair informações da descrição
+          const nomeMatch = description.match(/\*\*Nome:\*\*\s*(.+)/);
+          const idadeMatch = description.match(/\*\*Idade:\*\*\s*(.+)/);
+          const foiMakerMatch = description.match(/\*\*Já foi maker de outro servidor de GIFS\?\*\*\s*(.+)/);
+          const objetivoMatch = description.match(/\*\*Objetivo a alcançar:\*\*\s*(.+)/);
           console.log('Descrição encontrada:', description); // Debug
 
           // Extrair informações da descrição com regex mais robustos
@@ -2342,30 +1819,30 @@ GIFs: Todos os tipos (animados e estáticos)
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
       const confirmEmbed = new EmbedBuilder()
-        .setTitle('🔒 **THREAD TRANCADA**')
+        .setTitle('🔚 **THREAD ENCERRADA**')
         .setDescription(`
-> 👤 Esta thread de conversão foi trancada por ${interaction.user}.
+> 👤 Esta thread de conversão foi encerrada por ${interaction.user}.
 
-**Thread trancada com sucesso!**
+**Thread arquivada com sucesso!**
 
 \`\`\`yaml
-📊 Status: Trancada
+📊 Status: Finalizada
 👤 Solicitado por: ${interaction.user.username}
-⏰ Trancada em: ${new Date().toLocaleString('pt-BR')}
+⏰ Encerrada em: ${new Date().toLocaleString('pt-BR')}
 \`\`\`
 `)
         .setColor('#ff4444')
-        .setFooter({ text: 'GIFZADA CONVERTER PRO • Thread Trancada' })
+        .setFooter({ text: 'GIFZADA CONVERTER PRO • Thread Finalizada' })
         .setTimestamp();
 
       await interaction.reply({ embeds: [confirmEmbed] });
 
-      // Aguardar 3 segundos antes de trancar
+      // Aguardar 3 segundos antes de arquivar
       setTimeout(async () => {
         try {
-          await interaction.channel.setLocked(true);
+          await interaction.channel.setArchived(true);
         } catch (error) {
-          console.error('Erro ao trancar thread:', error);
+          console.error('Erro ao arquivar thread:', error);
         }
       }, 3000);
     } else {
@@ -2656,38 +2133,38 @@ client.on('messageCreate', async message => {
       const formatosEsperados = formatosValidos[tipo].join(', ');
 
       const errorEmbed = new EmbedBuilder()
-        .setTitle('❌ **FORMATO INCORRETO**')
+        .setTitle(' **FORMATO INCORRETO**')
         .setDescription(`
 ╭─────────────────────────────────╮
 │   **Formato não compatível!**   │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-🎯 Conversão Selecionada: ${tipo.toUpperCase()}
-📁 Arquivo Enviado: ${file.name}
-❌ Formato Detectado: ${fileExtension}
-✅ Formatos Esperados: ${formatosEsperados}
+ Conversão Selecionada: ${tipo.toUpperCase()}
+ Arquivo Enviado: ${file.name}
+ Formato Detectado: ${fileExtension}
+ Formatos Esperados: ${formatosEsperados}
 \`\`\`
 
-## 💡 **O QUE FAZER:**
+##  **O QUE FAZER:**
 
 ${tipo === 'video-to-gif' ? 
-  `### 🎬 **Para Vídeo → GIF:**
+  `###  **Para Vídeo → GIF:**
    \`•\` Envie um arquivo de **vídeo**
    \`•\` Formatos aceitos: **MP4, AVI, MOV, WMV, MKV, WEBM**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` : 
   tipo === 'resize-gif' ?
-  `### 🔄 **Para Redimensionar GIF:**
+  `###  **Para Redimensionar GIF:**
    \`•\` Envie um arquivo **GIF animado**
    \`•\` Formato aceito: **GIF**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**` :
-  `### ✂️ **Para Cortar Imagem:**
+  `###  **Para Cortar Imagem:**
    \`•\` Envie uma **imagem** ou **GIF**
    \`•\` Formatos aceitos: **PNG, JPG, JPEG, GIF, WEBP, BMP**
    \`•\` O arquivo enviado é um **${fileExtension.replace('.', '').toUpperCase()}**`
 }
 
-> 🔄 **Envie o arquivo correto ou escolha uma nova opção de conversão**
+>  **Envie o arquivo correto ou escolha uma nova opção de conversão**
 `)
         .setColor('#ff4444')
         .setFooter({ text: 'Verifique o formato do arquivo e tente novamente' })
@@ -2700,17 +2177,17 @@ ${tipo === 'video-to-gif' ?
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
-    .setTitle('⏳ **PROCESSAMENTO EM ANDAMENTO**')
+    .setTitle(' **PROCESSAMENTO EM ANDAMENTO**')
     .setDescription(`
 ╭─────────────────────────────────╮
 │   **Analisando seu arquivo...**  │
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-📁 Arquivo: ${file.name}
-📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
-🎯 Tipo: ${tipo.toUpperCase()}
-⏱️ Status: Iniciando processamento...
+ Arquivo: ${file.name}
+ Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+ Tipo: ${tipo.toUpperCase()}
+ Status: Iniciando processamento...
 \`\`\`
 
 **PROGRESSO:**
@@ -2718,7 +2195,7 @@ ${tipo === 'video-to-gif' ?
 
 `)
     .setColor('#ffaa00')
-    .setFooter({ text: '⚡ Sistema de conversão gifzada' })
+    .setFooter({ text: ' Sistema de conversão gifzada' })
     .setTimestamp();
 
   const aguardandoMsg = await message.channel.send({ embeds: [processEmbed] });
@@ -2732,10 +2209,10 @@ ${tipo === 'video-to-gif' ?
 ╰─────────────────────────────────╯
 
 \`\`\`yaml
-📁 Arquivo: ${file.name}
-📊 Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
-🎯 Tipo: ${tipo.toUpperCase()}
-⏱️ Status: Convertendo...
+ Arquivo: ${file.name}
+ Tamanho: ${(file.size / 1024 / 1024).toFixed(2)} MB
+ Tipo: ${tipo.toUpperCase()}
+ Status: Convertendo...
 \`\`\`
 
 **PROGRESSO:**
@@ -2755,10 +2232,10 @@ ${tipo === 'video-to-gif' ?
 
     if (originalSizeMB > maxInputSize) {
       await aguardandoMsg.edit({
-        content: `❌ **Arquivo de entrada muito grande!**\n\n` +
-                `📊 **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
-                `📋 **Limite:** ${maxInputSize} MB\n\n` +
-                `💡 **Dica:** Use um arquivo menor como entrada.`,
+        content: ` **Arquivo de entrada muito grande!**\n\n` +
+                ` **Tamanho:** ${originalSizeMB.toFixed(2)} MB\n` +
+                ` **Limite:** ${maxInputSize} MB\n\n` +
+                ` **Dica:** Use um arquivo menor como entrada.`,
         embeds: []
       });
       conversaoEscolha.delete(message.channel.id);
@@ -2776,10 +2253,10 @@ ${tipo === 'video-to-gif' ?
 
     if (fileSizeMB > maxOutputSize) {
       await aguardandoMsg.edit({
-        content: `❌ **Arquivo convertido muito grande!**\n\n` +
-                `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                `💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
+        content: ` **Arquivo convertido muito grande!**\n\n` +
+                ` **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
+                ` **Limite Discord:** ${maxOutputSize} MB\n\n` +
+                ` **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
         embeds: []
       });
 
@@ -2863,6 +2340,7 @@ ${tipo === 'video-to-gif' ?
 
     // Primeiro limpar completamente a mensagem de progresso
     await aguardandoMsg.edit({
+      content: ' **Finalizando conversão...**',
       content: '🔄 **Finalizando conversão...**',
       embeds: [],
       files: [],
@@ -2875,7 +2353,8 @@ ${tipo === 'video-to-gif' ?
     // Então enviar o resultado final completamente limpo
     await aguardandoMsg.edit({ 
       content: `${message.author} **Sua conversão está pronta!**`, 
-      embeds: [resultEmbed],       files: [attachment],
+      embeds: [resultEmbed], 
+      files: [attachment],
       components: []
     });
 
@@ -2960,7 +2439,6 @@ async function processFile(attachment, type, percentage = null) {
       const lossyValue = Math.min(optimizationPercentage * 2, 200); // Ajustar lossy baseado na porcentagem
       const colorsValue = Math.max(256 - (optimizationPercentage * 2), 32); // Reduzir cores baseado na porcentagem
 
-      const gifsicle = (await import('gifsicle')).default;
       await new Promise((resolve, reject) => {
         execFile(gifsicle, [
           '--optimize=3',
@@ -3000,7 +2478,6 @@ async function processFile(attachment, type, percentage = null) {
         const left = Math.floor((width - cropSize) / 2);
         const top = Math.floor((height - cropSize) / 2);
 
-        const gifsicle = (await import('gifsicle')).default;
         await new Promise((resolve, reject) => {
           execFile(gifsicle, [
             '--crop', `${left},${top}+${cropSize}x${cropSize}`,
@@ -3043,126 +2520,13 @@ async function processFile(attachment, type, percentage = null) {
       }
     }
 
-    case 'crop-custom': {
-      const response = await fetch(attachment.url);
-      const buffer = await response.buffer();
-      const { cropType, cropAmount } = percentage || {};
-
-      const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
-
-      if (isGif) {
-        const inputPath = `input_${nomeBase}.gif`;
-        const outputPath = `output_${nomeBase}.gif`;
-        fs.writeFileSync(inputPath, buffer);
-        temporarios.push(inputPath, outputPath);
-
-        const metadata = await sharp(buffer, { animated: false }).metadata();
-        const { width, height } = metadata;
-
-        let cropArgs;
-        switch (cropType) {
-          case 'direita':
-            cropArgs = `0,0+${width - cropAmount}x${height}`;
-            break;
-          case 'esquerda':
-            cropArgs = `${cropAmount},0+${width - cropAmount}x${height}`;
-            break;
-          case 'cima':
-            cropArgs = `0,${cropAmount}+${width}x${height - cropAmount}`;
-            break;
-          case 'baixo':
-            cropArgs = `0,0+${width}x${height - cropAmount}`;
-            break;
-          default:
-            throw new Error('Tipo de crop inválido');
-        }
-
-        const gifsicle = (await import('gifsicle')).default;
-        await new Promise((resolve, reject) => {
-          execFile(gifsicle, [
-            '--crop', cropArgs,
-            inputPath, 
-            '-o', outputPath
-          ], err => {
-            if (err) return reject(err);
-            resolve();
-          });
-        });
-
-        const croppedGif = fs.readFileSync(outputPath);
-        return { buffer: croppedGif, name: `crop_${cropType}.gif`, temporarios };
-      } else {
-        const extension = attachment.name.split('.').pop().toLowerCase();
-        const metadata = await sharp(buffer).metadata();
-        const { width, height } = metadata;
-
-        let extractOptions;
-        switch (cropType) {
-          case 'direita':
-            extractOptions = { left: 0, top: 0, width: width - cropAmount, height: height };
-            break;
-          case 'esquerda':
-            extractOptions = { left: cropAmount, top: 0, width: width - cropAmount, height: height };
-            break;
-          case 'cima':
-            extractOptions = { left: 0, top: cropAmount, width: width, height: height - cropAmount };
-            break;
-          case 'baixo':
-            extractOptions = { left: 0, top: 0, width: width, height: height - cropAmount };
-            break;
-          default:
-            throw new Error('Tipo de crop inválido');
-        }
-
-        const croppedImage = await sharp(buffer)
-          .extract(extractOptions)
-          .toBuffer();
-
-        return { 
-          buffer: croppedImage, 
-          name: `crop_${cropType}.${extension || 'png'}`, 
-          temporarios: [] 
-        };
-      }
-    }
-
-    case 'cut-frames': {
-      const { startTime, endTime } = percentage || {};
-      const response = await fetch(attachment.url);
-      const buffer = await response.buffer();
-      const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
-
-      const tempInput = `cut_input_${nomeBase}${fileExtension}`;
-      const tempOutput = `cut_output_${nomeBase}.gif`;
-      fs.writeFileSync(tempInput, buffer);
-      temporarios.push(tempInput, tempOutput);
-
-      const duration = endTime - startTime;
-
-      await new Promise((resolve, reject) => {
-        ffmpeg(tempInput)
-          .setStartTime(startTime)
-          .setDuration(duration)
-          .outputOptions([
-            '-vf', 'scale=480:-1:flags=lanczos,fps=30',
-            '-pix_fmt', 'rgb24'
-          ])
-          .toFormat('gif')
-          .on('end', resolve)
-          .on('error', reject)
-          .save(tempOutput);
-      });
-
-      const cutGif = fs.readFileSync(tempOutput);
-      return { buffer: cutGif, name: `frames_${startTime}s-${endTime}s.gif`, temporarios };
-    }
-
     case 'youtube-to-gif':
       throw new Error('Use o botão YouTube → GIF para inserir o link do vídeo');
 
     case 'batch-convert': {
       // Para conversão em lote, processar como vídeo para GIF por padrão
       const validFormats = ['.mp4', '.wmv', '.flv', '.mov', '.gif', '.png', '.jpg', '.jpeg'];
+      const fileExtension = afttachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
       const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
 
       if (!fileExtension || !validFormats.includes(fileExtension)) {
@@ -3416,7 +2780,7 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
 
     return gifBuffer;
 
-  } catch (error) {
+  } catch (error) {More actions
     // Limpar arquivos em caso de erro
     [tempVideo, tempGif].forEach(file => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
@@ -3425,271 +2789,4 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
   }
 }
 
-// Função para gerar profile card com Canvas - Novo design moderno
-async function generateProfileCard(user, member, guild) {
-  try {
-    // Buscar dados do usuário no banco com fallback
-    let profile;
-    let metaInfo;
-    
-    try {
-      profile = await db.getUserProfile(user.id, guild.id);
-      metaInfo = db.getMetaInfoByCargo(member);
-    } catch (dbError) {
-      console.error('Erro ao buscar dados do banco:', dbError);
-      // Usar dados padrão se o banco falhar
-      profile = {
-        meta: 0,
-        entregas: 0,
-        dinheiro: 0,
-        sobremim: 'Use !sobremim <msg> para alterar!',
-        background: 'padrão'
-      };
-      metaInfo = { nivel: 'Iniciante', max: 20, cor: '#d2a8ff' };
-    }
-  
-  // Buscar background personalizado do usuário ou usar o padrão do servidor
-  let backgroundUrl = profile.background;
-  if (backgroundUrl === 'padrão') {
-    backgroundUrl = await db.getServerConfig(guild.id, 'default_background') || 'padrão';
-  }
-
-  // Dimensões do card
-  const width = 800;
-  const height = 480;
-
-  // Criar canvas
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  // Função auxiliar para desenhar retângulos arredondados
-  function roundRect(x, y, width, height, radius) {
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-    ctx.lineTo(x + radius, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-  }
-
-  // FUNDO PRINCIPAL
-  let backgroundImage = null;
-
-  if (backgroundUrl && backgroundUrl !== 'padrão') {
-    try {
-      backgroundImage = await loadImage(backgroundUrl);
-    } catch (error) {
-      console.error('Erro ao carregar background customizado:', error);
-    }
-  }
-
-  if (backgroundImage) {
-    // Desenhar imagem de fundo customizada
-    ctx.drawImage(backgroundImage, 0, 0, width, height);
-  } else {
-    // Gradiente padrão estilo moderno
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, '#8B45FF');
-    gradient.addColorStop(0.3, '#FF69B4');
-    gradient.addColorStop(0.6, '#00BFFF');
-    gradient.addColorStop(1, '#9945FF');
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-  }
-
-  // SEÇÃO DO HEADER (avatar + nome)
-  // Fundo semi-transparente para o header
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-  roundRect(30, 30, width - 60, 160, 25);
-  ctx.fill();
-
-  // Carregar avatar do usuário
-  let avatarImage;
-  try {
-    const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 256 });
-    avatarImage = await loadImage(avatarUrl);
-  } catch (error) {
-    console.error('Erro ao carregar avatar:', error);
-    avatarImage = await loadImage('https://cdn.discordapp.com/embed/avatars/0.png');
-  }
-
-  // Avatar circular
-  const avatarSize = 120;
-  const avatarX = 60;
-  const avatarY = 50;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
-  ctx.closePath();
-  ctx.clip();
-  ctx.drawImage(avatarImage, avatarX, avatarY, avatarSize, avatarSize);
-  ctx.restore();
-
-  // Borda do avatar com gradiente
-  const avatarBorder = ctx.createLinearGradient(avatarX, avatarY, avatarX + avatarSize, avatarY + avatarSize);
-  avatarBorder.addColorStop(0, '#FFD700');
-  avatarBorder.addColorStop(1, '#FF69B4');
-  ctx.strokeStyle = avatarBorder;
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Nome do usuário
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 42px Arial';
-  ctx.textAlign = 'left';
-  ctx.fillText(user.username, 220, 120);
-
-  // Subtitle/descrição do perfil
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-  ctx.font = '20px Arial';
-  ctx.fillText(profile.sobremim, 220, 150);
-
-  // Status do usuário com indicador visual
-  const presence = member.presence;
-  let statusColor = '#747f8d';
-  let statusText = 'Offline';
-
-  if (presence) {
-    switch (presence.status) {
-      case 'online':
-        statusColor = '#43b581';
-        statusText = 'Online';
-        break;
-      case 'idle':
-        statusColor = '#faa61a';
-        statusText = 'Ausente';
-        break;
-      case 'dnd':
-        statusColor = '#f04747';
-        statusText = 'Não Perturbe';
-        break;
-    }
-  }
-
-  // SEÇÃO DE ESTATÍSTICAS - Layout em grid moderno
-  const statsY = 220;
-  const statHeight = 50;
-  const statWidth = 170;
-  const gap = 20;
-
-  // Mapear cargos para nomes e cores
-  const roleMap = {
-    '1065441742301704202': { name: 'Dizimador', color: '#ffffff' },
-    '1065441743379628043': { name: 'Defensor', color: '#000000' },
-    '1065441744726020126': { name: 'Guardião', color: '#e2002d' },
-    '1386493660010516693': { name: 'Ruptura', color: '#f08cff' },
-    '1317652394351525959': { name: 'Ascenso', color: '#ff9f29' },
-    '1386492093303885907': { name: 'Vanguarda', color: '#5aebff' },
-    '1065441745875243008': { name: 'Espectro', color: '#fcb0ff' },
-    '1065441747305508916': { name: 'Crepusculo', color: '#948cff' },
-    '1285648807501238344': { name: 'Sentinel', color: '#2caeff' },
-    '1065441748446359584': { name: 'Mestre', color: '#fcff5b' },
-    '1065441749947928656': { name: 'Aprendiz', color: '#1065441749947928656' },
-    '1065441754855260200': { name: 'Lendario', color: '#ff40e9' },
-    '1065441756092571729': { name: 'Divindade', color: '#8b1fff' },
-    '1065441757560574023': { name: 'Master', color: '#69daff' },
-    '1065441759171186688': { name: 'Místico', color: '#44ff73' },
-    '1065441760177827930': { name: 'Celestial', color: '#fff345' },
-    '1065441761171869796': { name: 'Iniciante', color: '#d2a8ff' },
-    '953748686884716574': { name: 'Booster', color: '#6f008b' },
-    '1065441800032092241': { name: 'Membro', color: '#c7c7c7' }
-  };
-
-  // Encontrar o cargo do usuário
-  let userRole = { name: 'Membro', color: '#c7c7c7' }; // Default
-
-  for (const [roleId, roleInfo] of Object.entries(roleMap)) {
-    if (member.roles.cache.has(roleId)) {
-      userRole = roleInfo;
-      break; // Pega o primeiro cargo encontrado
-    }
-  }
-
-  // Formatar dinheiro
-  const money = profile.dinheiro < 1000 ? 
-    profile.dinheiro.toString() : 
-    (profile.dinheiro / 1000000).toFixed(1) + 'M';
-
-  const stats = [
-    { icon: '🌍', label: userRole.name, color: userRole.color },
-    { icon: '🎯', label: `${profile.meta}/${metaInfo.max}`, color: metaInfo.cor },
-    { icon: '📦', label: `${profile.entregas} Entregas`, color: '#FFFFFF' },
-    { icon: '💰', label: money, color: '#FFFFFF' }
-  ];
-
-  // Stats preenchidos (lado esquerdo)
-  for (let i = 0; i < 4; i++) {
-    const col = Math.floor(i / 2);
-    const row = i % 2;
-    const statX = 50 + col * (statWidth + gap);
-    const slotY = statsY + row * (statHeight + gap);
-    const stat = stats[i];
-
-    // Fundo do stat
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    roundRect(statX, slotY, statWidth, statHeight, 15);
-    ctx.fill();
-
-    // Ícone do stat
-    ctx.font = '24px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText(stat.icon, statX + 15, slotY + 32);
-
-    // Texto do stat
-    ctx.fillStyle = stat.color;
-    ctx.font = 'bold 18px Arial';
-    ctx.fillText(stat.label, statX + 50, slotY + 32);
-  }
-
-  // Barra de progresso da meta (se não estiver no máximo)
-  if (metaInfo.nivel !== 'Máximo') {
-    const progressY = 380;
-    const progressWidth = 300;
-    const progressHeight = 20;
-    const progressX = 50;
-    
-    // Fundo da barra
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    roundRect(progressX, progressY, progressWidth, progressHeight, 10);
-    ctx.fill();
-    
-    // Progresso
-    const progress = (profile.meta / metaInfo.max) * progressWidth;
-    ctx.fillStyle = metaInfo.cor;
-    roundRect(progressX, progressY, progress, progressHeight, 10);
-    ctx.fill();
-    
-    // Texto do nível
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText(`Meta ${metaInfo.nivel}`, progressX, progressY - 8);
-  }
-
-  // Marca d'água estilizada
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-  ctx.font = 'bold 12px Arial';
-  ctx.textAlign = 'right';
-  ctx.fillText('GIFZADA • Profile Card', width - 30, height - 15);
-
-  return canvas.toBuffer('image/png');
-  } catch (error) {
-    console.error('Erro fatal na geração do profile card:', error);
-    throw new Error('Falha na geração do profile card: ' + error.message);
-  }
-}
-
-// Login com tratamento de erro
-client.login(process.env.TOKEN).catch(error => {
-  console.error('Erro crítico no login do bot:', error);
-  process.exit(1);
-});
+client.login(process.env.TOKEN);
