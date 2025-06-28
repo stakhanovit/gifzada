@@ -1,3 +1,4 @@
+
 const {
   Client,
   GatewayIntentBits,
@@ -502,7 +503,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-
+      
       // Buscar o membro com mais detalhes, incluindo fetch se necessário
       let targetMember;
       try {
@@ -570,7 +571,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       const targetUser = interaction.options.getUser('usuario');
-
+      
       // Buscar o membro com mais detalhes, incluindo fetch se necessário
       let targetMember;
       try {
@@ -1670,9 +1671,6 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     // Se for ticket de maker, enviar para apadrinhamento
     if (customId === 'fechar_ticket_maker') {
       try {
-        // Buscar as informações do maker na thread
-        const messages = await interaction.channel.messages.fetch({ limit: 10 });
-        const makerMessage = messages.find(msg => msg.embeds.length > 0 && msg.embeds[0].title?.includes('SEJA MAKER'));
         // Buscar todas as mensagens da thread para encontrar a embed do maker
         const messages = await interaction.channel.messages.fetch({ limit: 50 });
         const makerMessage = messages.find(msg => 
@@ -1685,11 +1683,6 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
           const embed = makerMessage.embeds[0];
           const description = embed.description;
 
-          // Extrair informações da descrição
-          const nomeMatch = description.match(/\*\*Nome:\*\*\s*(.+)/);
-          const idadeMatch = description.match(/\*\*Idade:\*\*\s*(.+)/);
-          const foiMakerMatch = description.match(/\*\*Já foi maker de outro servidor de GIFS\?\*\*\s*(.+)/);
-          const objetivoMatch = description.match(/\*\*Objetivo a alcançar:\*\*\s*(.+)/);
           console.log('Descrição encontrada:', description); // Debug
 
           // Extrair informações da descrição com regex mais robustos
@@ -1931,7 +1924,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_maker_')) {
     const userId = customId.replace('confirm_maker_', '');
-
+    
     // Buscar o membro com fetch para garantir dados atualizados
     let targetMember;
     try {
@@ -2009,7 +2002,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
   if (customId.startsWith('confirm_postador_')) {
     const userId = customId.replace('confirm_postador_', '');
-
+    
     // Buscar o membro com fetch para garantir dados atualizados
     let targetMember;
     try {
@@ -2131,7 +2124,7 @@ client.on('messageCreate', async message => {
   if (formatosValidos[tipo] && fileExtension) {
     if (!formatosValidos[tipo].includes(fileExtension)) {
       const formatosEsperados = formatosValidos[tipo].join(', ');
-
+      
       const errorEmbed = new EmbedBuilder()
         .setTitle(' **FORMATO INCORRETO**')
         .setDescription(`
@@ -2340,7 +2333,6 @@ ${tipo === 'video-to-gif' ?
 
     // Primeiro limpar completamente a mensagem de progresso
     await aguardandoMsg.edit({
-      content: ' **Finalizando conversão...**',
       content: '🔄 **Finalizando conversão...**',
       embeds: [],
       files: [],
@@ -2526,7 +2518,6 @@ async function processFile(attachment, type, percentage = null) {
     case 'batch-convert': {
       // Para conversão em lote, processar como vídeo para GIF por padrão
       const validFormats = ['.mp4', '.wmv', '.flv', '.mov', '.gif', '.png', '.jpg', '.jpeg'];
-      const fileExtension = afttachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
       const fileExtension = attachment.name.toLowerCase().match(/\.[^.]*$/)?.[0];
 
       if (!fileExtension || !validFormats.includes(fileExtension)) {
