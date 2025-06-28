@@ -1,4 +1,4 @@
-const {More actions
+const {
   Client,
   GatewayIntentBits,
   Partials,
