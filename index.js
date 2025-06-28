@@ -1,4 +1,4 @@
-const {
+const {More actions
   Client,
   GatewayIntentBits,
   Partials,
@@ -2780,7 +2780,7 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
 
     return gifBuffer;
 
-  } catch (error) {More actions
+  } catch (error) {
     // Limpar arquivos em caso de erro
     [tempVideo, tempGif].forEach(file => {
       if (fs.existsSync(file)) fs.unlinkSync(file);
