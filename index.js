@@ -51,7 +51,7 @@ const conversaoEscolha = new Map();
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
 
-  // Registrar comandos slash
+  // Registrar comandos slas
   const commands = [
     {
       name: 'lock',
