@@ -173,14 +173,11 @@ client.once('ready', async () => {
           CreatePrivateThreads: true
         });
 
-        const unlockEmbed = new EmbedBuilder()
-          .setTitle('Abertura automática GIFZADA')
-          .setDescription(`Este canal foi automaticamente aberto às ${horario} conforme programado.`)
-          .setColor('#9c41ff')
-          .setTimestamp()
-          .setFooter({ text: 'Sistema Automático de abertura' });
+        // Encontrar horário de fechamento do canal
+        const canalInfo = canalHorarios.find(c => c.id === channelId);
+        const horarioFechamento = canalInfo ? canalInfo.fecha : 'horário programado';
 
-        await channel.send({ embeds: [unlockEmbed] });
+        await channel.send(`<:a_gifzada:1266774740115132468> Aberto <:a_gifzada:1266774740115132468>!\nEstaremos aberto até às ${horarioFechamento}h (BRT).`);
         console.log(`Canal ${channel.name} foi automaticamente desbloqueado às ${horario}`);
 
       } else if (acao === 'fechar') {
@@ -205,15 +202,7 @@ client.once('ready', async () => {
         const canalInfo = canalHorarios.find(c => c.id === channelId);
         const horarioAbertura = canalInfo ? canalInfo.abre : 'horário programado';
 
-        const lockEmbed = new EmbedBuilder()
-          .setTitle('Fechamento Automático GIFZADA')
-          .setDescription(`Este canal foi automaticamente fechado e abrirá amanhã às **${horarioAbertura}**.`)
-          .setThumbnail(channel.guild.iconURL({ dynamic: true, size: 512 }))
-          .setColor('#9c41ff')
-          .setTimestamp()
-          .setFooter({ text: 'Sistema automático de Fechamento' });
-
-        await channel.send({ embeds: [lockEmbed] });
+        await channel.send(`<:a_gifzada:1266774740115132468> Fechado <:a_gifzada:1266774740115132468>!\nAbriremos novamente amanhã às ${horarioAbertura}h (BRT).`);
         console.log(`Canal ${channel.name} foi automaticamente bloqueado às ${horario}`);
       }
 
@@ -1773,33 +1762,21 @@ GIFs: Todos os tipos (animados e estáticos)
   // Handler para encerrar thread
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
-      const confirmEmbed = new EmbedBuilder()
-        .setTitle('🔚 **THREAD ENCERRADA**')
-        .setDescription(`
-> 👤 Esta thread de conversão foi encerrada por ${interaction.user}.
+      await interaction.reply({ 
+        content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
+      });
 
-**Thread arquivada com sucesso!**
-
-\`\`\`yaml
-📊 Status: Finalizada
-👤 Solicitado por: ${interaction.user.username}
-⏰ Encerrada em: ${new Date().toLocaleString('pt-BR')}
-\`\`\`
-`)
-        .setColor('#ff4444')
-        .setFooter({ text: 'GIFZADA CONVERTER PRO • Thread Finalizada' })
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [confirmEmbed] });
-
-      // Aguardar 3 segundos antes de arquivar
+      // Aguardar 2 segundos antes de trancar e arquivar
       setTimeout(async () => {
         try {
+          // Trancar a thread primeiro
+          await interaction.channel.setLocked(true);
+          // Depois arquivar
           await interaction.channel.setArchived(true);
         } catch (error) {
-          console.error('Erro ao arquivar thread:', error);
+          console.error('Erro ao trancar/arquivar thread:', error);
         }
-      }, 3000);
+      }, 2000);
     } else {
       await interaction.reply({ 
         content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
