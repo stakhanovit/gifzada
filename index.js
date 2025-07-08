@@ -55,6 +55,10 @@ const postAuthors = new Map(); // postId -> authorId
 const postPrivacySettings = new Map(); // postId -> {commentsPrivate: boolean, likesPrivate: boolean}
 const userCommentCount = new Map(); // postId -> Map(userId -> count)
 
+// Maps para sistema de verificação
+const activeVerificationThreads = new Map(); // userId -> threadId
+const blockedVerificationUsers = new Set(); // userIds bloqueados
+
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
 
@@ -640,23 +644,42 @@ client.on('messageCreate', async message => {
       });
     }
 
+    // Estatísticas do sistema
+    const activeThreadsCount = activeVerificationThreads.size;
+    const blockedUsersCount = blockedVerificationUsers.size;
+    const totalPosts = postAuthors.size;
+    const totalLikes = Array.from(postLikes.values()).reduce((total, likes) => total + likes.size, 0);
+    const totalComments = Array.from(postComments.values()).reduce((total, comments) => total + comments.length, 0);
+
     const painelEmbed = new EmbedBuilder()
       .setTitle('⚙️ PAINEL ADMINISTRATIVO')
       .setDescription(`
 **Painel de controle para administradores**
 
-Selecione uma das opções abaixo para gerenciar o servidor:
+## 📊 **ESTATÍSTICAS DO SISTEMA:**
+\`\`\`yaml
+🔍 Verificações Ativas: ${activeThreadsCount}
+🚫 Usuários Bloqueados: ${blockedUsersCount}
+📝 Total de Posts: ${totalPosts}
+❤️ Total de Curtidas: ${totalLikes}
+💬 Total de Comentários: ${totalComments}
+\`\`\`
+
+## 🛠️ **AÇÕES DISPONÍVEIS:**
 
 🗑️ **Deletar Postagem** - Remove uma postagem pelo ID da mensagem
-💬 **Deletar Comentário** - Remove um comentário específico (use o Post ID dos botões)
+💬 **Deletar Comentário** - Remove um comentário específico
 ❌ **Retirar Verificado** - Remove o cargo de verificado de um usuário
+🚫 **Bloquear Usuário** - Bloqueia usuário de usar verificação
+📋 **Ver Bloqueados** - Lista todos os usuários bloqueados
+🔓 **Desbloquear Usuário** - Remove bloqueio de verificação
 
 **💡 Dica:** Para deletar comentários, use o Post ID que aparece nos botões das postagens (ex: post_1234567890_123456789)
 `)
       .setColor('#ff0000')
       .setTimestamp();
 
-    const painelRow = new ActionRowBuilder().addComponents(
+    const painelRow1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('admin_delete_post')
         .setLabel('Deletar Postagem')
@@ -671,10 +694,28 @@ Selecione uma das opções abaixo para gerenciar o servidor:
         .setCustomId('admin_remove_verified')
         .setLabel('Retirar Verificado')
         .setEmoji('❌')
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('admin_block_user')
+        .setLabel('Bloquear Usuário')
+        .setEmoji('🚫')
+        .setStyle(ButtonStyle.Danger)
     );
 
-    await message.channel.send({ embeds: [painelEmbed], components: [painelRow] });
+    const painelRow2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_view_blocked')
+        .setLabel('Ver Bloqueados')
+        .setEmoji('📋')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('admin_unblock_user')
+        .setLabel('Desbloquear Usuário')
+        .setEmoji('🔓')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await message.channel.send({ embeds: [painelEmbed], components: [painelRow1, painelRow2] });
   }
 
   if (message.content === '!verificar') {
@@ -691,7 +732,7 @@ Selecione uma das opções abaixo para gerenciar o servidor:
 <:d_dot43:1366581992413728830> Suas informações não serão compartilhadas com ninguém além da equipe responsável.
 
 **Equipe principal de verificação:**
-<@889317995397140500> • <@309686166460956672> • <@1032510101753446421> • <@1217811542012198926>
+<@1057450058347462838> • <@309686166460956672> • <@1032510101753446421> • <@1217811542012198926>
 
 <:d_dot43:1366581992413728830>  Este espaço é reservado apenas para imagens reais do seu próprio rosto.
 <:d_dot43:1366581992413728830>  Evite usar fotos de outras pessoas ou qualquer conteúdo enganoso.
@@ -1295,6 +1336,53 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       }
       
       await interaction.reply({ content: '✅ Comentário deletado com sucesso!', ephemeral: true });
+    }
+
+    // Handler para modal de bloquear usuário
+    if (interaction.customId === 'admin_block_user_modal') {
+      const userId = interaction.fields.getTextInputValue('user_id');
+      const reason = interaction.fields.getTextInputValue('reason') || 'Não especificado';
+      
+      try {
+        const user = await client.users.fetch(userId);
+        blockedVerificationUsers.add(userId);
+        
+        await interaction.reply({ 
+          content: `✅ Usuário ${user.username} (${userId}) foi bloqueado de usar verificação!\n**Motivo:** ${reason}`, 
+          ephemeral: true 
+        });
+      } catch (error) {
+        await interaction.reply({ 
+          content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
+          ephemeral: true 
+        });
+      }
+    }
+
+    if (interaction.customId === 'admin_unblock_user_modal') {
+      const userId = interaction.fields.getTextInputValue('user_id');
+      
+      if (!blockedVerificationUsers.has(userId)) {
+        return interaction.reply({ 
+          content: '❌ Este usuário não está bloqueado.', 
+          ephemeral: true 
+        });
+      }
+      
+      try {
+        const user = await client.users.fetch(userId);
+        blockedVerificationUsers.delete(userId);
+        
+        await interaction.reply({ 
+          content: `✅ Usuário ${user.username} (${userId}) foi desbloqueado e pode usar verificação novamente!`, 
+          ephemeral: true 
+        });
+      } catch (error) {
+        await interaction.reply({ 
+          content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
+          ephemeral: true 
+        });
+      }
     }
 
     // Handler para modais do painel administrativo
@@ -2201,6 +2289,30 @@ GIFs: Todos os tipos (animados e estáticos)
 
   // Handler para verificação
   if (customId === 'verificar_se') {
+    // Verificar se o usuário está bloqueado
+    if (blockedVerificationUsers.has(user.id)) {
+      return interaction.reply({
+        content: '🚫 **Você está bloqueado pela administração**\n\nVocê não pode iniciar processos de verificação. Entre em contato com o suporte para mais informações.',
+        ephemeral: true
+      });
+    }
+
+    // Verificar se o usuário já tem uma thread de verificação ativa
+    if (activeVerificationThreads.has(user.id)) {
+      const existingThreadId = activeVerificationThreads.get(user.id);
+      const existingThread = client.channels.cache.get(existingThreadId);
+      
+      if (existingThread && !existingThread.archived) {
+        return interaction.reply({
+          content: `❌ **Você já possui um processo de verificação ativo!**\n\nAcesse sua thread: ${existingThread}`,
+          ephemeral: true
+        });
+      } else {
+        // Se a thread não existe mais ou está arquivada, remover do mapa
+        activeVerificationThreads.delete(user.id);
+      }
+    }
+
     try {
       // Adicionar cargo temporário de verificação
       const tempVerificationRoleId = '1392263610616778752';
@@ -2226,6 +2338,9 @@ GIFs: Todos os tipos (animados e estáticos)
     });
 
     starterMessage.delete().catch(() => {});
+
+    // Registrar thread ativa
+    activeVerificationThreads.set(user.id, thread.id);
 
     const verificationEmbed = new EmbedBuilder()
       .setTitle('**Olá! Bem-vindo(a) ao processo de verificação.**')
@@ -2599,6 +2714,10 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
         try {
           // Limpar o registro de quem assumiu a verificação
           verificationAssignments.delete(interaction.channel.id);
+          
+          // Remover thread ativa do usuário
+          activeVerificationThreads.delete(userId);
+          
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.error('Erro ao arquivar thread de verificação:', error);
@@ -2684,6 +2803,8 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
       });
     }
 
+    let userId = null;
+
     // Encontrar o usuário que iniciou a verificação através do nome da thread
     const threadName = interaction.channel.name;
     const usernameMatch = threadName.match(/🔍・Verificação - (.+)/);
@@ -2696,6 +2817,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
       
       if (firstMessage && firstMessage.mentions.users.size > 0) {
         const mentionedUser = firstMessage.mentions.users.first();
+        userId = mentionedUser.id;
         const member = interaction.guild.members.cache.get(mentionedUser.id);
         
         if (member) {
@@ -2732,6 +2854,12 @@ Thread será arquivada em alguns segundos...
       try {
         // Limpar o registro de quem assumiu a verificação
         verificationAssignments.delete(interaction.channel.id);
+        
+        // Remover thread ativa do usuário se encontrado
+        if (userId) {
+          activeVerificationThreads.delete(userId);
+        }
+        
         await interaction.channel.setArchived(true);
       } catch (error) {
         console.error('Erro ao arquivar thread de verificação:', error);
@@ -2785,6 +2913,87 @@ Thread será arquivada em alguns segundos...
     );
 
     await interaction.reply({ embeds: [settingsEmbed], components: [settingsRow1, settingsRow2], ephemeral: true });
+  }
+
+  // Handler para botão de bloquear usuário
+  if (customId === 'admin_block_user') {
+    const modal = new ModalBuilder()
+      .setCustomId('admin_block_user_modal')
+      .setTitle('Bloquear Usuário - Verificação');
+
+    const userIdInput = new TextInputBuilder()
+      .setCustomId('user_id')
+      .setLabel('ID do Usuário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('ID do usuário para bloquear verificação')
+      .setRequired(true);
+
+    const reasonInput = new TextInputBuilder()
+      .setCustomId('reason')
+      .setLabel('Motivo do Bloqueio (opcional)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Motivo do bloqueio...')
+      .setRequired(false);
+
+    const row1 = new ActionRowBuilder().addComponents(userIdInput);
+    const row2 = new ActionRowBuilder().addComponents(reasonInput);
+    modal.addComponents(row1, row2);
+
+    await interaction.showModal(modal);
+  }
+
+  if (customId === 'admin_view_blocked') {
+    if (blockedVerificationUsers.size === 0) {
+      return interaction.reply({
+        content: '📋 **Nenhum usuário bloqueado**\n\nNão há usuários bloqueados no sistema de verificação.',
+        ephemeral: true
+      });
+    }
+
+    let blockedList = '**👥 USUÁRIOS BLOQUEADOS:**\n\n';
+    
+    for (const userId of blockedVerificationUsers) {
+      try {
+        const user = await client.users.fetch(userId);
+        blockedList += `🚫 **${user.username}** (${user.id})\n`;
+      } catch (error) {
+        blockedList += `🚫 **Usuário Desconhecido** (${userId})\n`;
+      }
+    }
+
+    const blockedEmbed = new EmbedBuilder()
+      .setTitle('📋 USUÁRIOS BLOQUEADOS')
+      .setDescription(blockedList)
+      .setColor('#ff4444')
+      .setFooter({ text: `Total: ${blockedVerificationUsers.size} usuário(s) bloqueado(s)` })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [blockedEmbed], ephemeral: true });
+  }
+
+  if (customId === 'admin_unblock_user') {
+    if (blockedVerificationUsers.size === 0) {
+      return interaction.reply({
+        content: '❌ Não há usuários bloqueados para desbloquear.',
+        ephemeral: true
+      });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId('admin_unblock_user_modal')
+      .setTitle('Desbloquear Usuário - Verificação');
+
+    const userIdInput = new TextInputBuilder()
+      .setCustomId('user_id')
+      .setLabel('ID do Usuário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('ID do usuário para desbloquear verificação')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(userIdInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
   }
 
   // Handler para botões do painel administrativo
