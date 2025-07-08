@@ -52,6 +52,8 @@ const conversaoEscolha = new Map();
 const postLikes = new Map(); // postId -> Set de userIds que curtiram
 const postComments = new Map(); // postId -> Array de {userId, comment, timestamp}
 const postAuthors = new Map(); // postId -> authorId
+const postPrivacySettings = new Map(); // postId -> {commentsPrivate: boolean, likesPrivate: boolean}
+const userCommentCount = new Map(); // postId -> Map(userId -> count)
 
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
@@ -407,6 +409,8 @@ client.on('messageCreate', async message => {
     postLikes.set(postId, new Set());
     postComments.set(postId, []);
     postAuthors.set(postId, message.author.id);
+    postPrivacySettings.set(postId, { commentsPrivate: false, likesPrivate: false });
+    userCommentCount.set(postId, new Map());
     
     // Criar webhook
     const webhooks = await message.channel.fetchWebhooks();
@@ -419,8 +423,8 @@ client.on('messageCreate', async message => {
       });
     }
     
-    // Criar botões
-    const postButtons = new ActionRowBuilder().addComponents(
+    // Criar botões - primeira linha (4 botões)
+    const postButtons1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`like_${postId}`)
         .setLabel('0')
@@ -437,11 +441,15 @@ client.on('messageCreate', async message => {
       new ButtonBuilder()
         .setCustomId(`show_comments_${postId}`)
         .setEmoji('<:comments:1392242423186329693>')
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    // Segunda linha (1 botão)
+    const postButtons2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`delete_${postId}`)
-        .setEmoji('<:delete:1392242553901813881>')
-        .setStyle(ButtonStyle.Danger)
+        .setCustomId(`settings_${postId}`)
+        .setEmoji('⚙️')
+        .setStyle(ButtonStyle.Secondary)
     );
     
     // Baixar e reenviar o arquivo para garantir permanência
@@ -455,7 +463,7 @@ client.on('messageCreate', async message => {
       files: [fileAttachment],
       username: message.author.displayName || message.author.username,
       avatarURL: message.author.displayAvatarURL({ dynamic: true }),
-      components: [postButtons]
+      components: [postButtons1, postButtons2]
     });
     
     // Deletar mensagem original
@@ -618,6 +626,55 @@ client.on('messageCreate', async message => {
     );
 
     await message.channel.send({ embeds: [embed], components: [row1] });
+  }
+
+  if (message.content === '!painel') {
+    // Verificar se o usuário tem o cargo de staff
+    const staffRoleId = '1392247839857315912';
+    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
+
+    if (!hasStaffRole) {
+      return message.reply({
+        content: '❌ Apenas membros da staff podem usar este comando.',
+        ephemeral: true
+      });
+    }
+
+    const painelEmbed = new EmbedBuilder()
+      .setTitle('⚙️ PAINEL ADMINISTRATIVO')
+      .setDescription(`
+**Painel de controle para administradores**
+
+Selecione uma das opções abaixo para gerenciar o servidor:
+
+🗑️ **Deletar Postagem** - Remove uma postagem pelo ID da mensagem
+💬 **Deletar Comentário** - Remove um comentário específico (use o Post ID dos botões)
+❌ **Retirar Verificado** - Remove o cargo de verificado de um usuário
+
+**💡 Dica:** Para deletar comentários, use o Post ID que aparece nos botões das postagens (ex: post_1234567890_123456789)
+`)
+      .setColor('#ff0000')
+      .setTimestamp();
+
+    const painelRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('admin_delete_post')
+        .setLabel('Deletar Postagem')
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('admin_delete_comment')
+        .setLabel('Deletar Comentário')
+        .setEmoji('💬')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('admin_remove_verified')
+        .setLabel('Retirar Verificado')
+        .setEmoji('❌')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await message.channel.send({ embeds: [painelEmbed], components: [painelRow] });
   }
 
   if (message.content === '!verificar') {
@@ -1189,6 +1246,14 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (!postComments.has(postId)) {
         return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
       }
+
+      // Verificar limite de comentários por usuário
+      const commentCounts = userCommentCount.get(postId) || new Map();
+      const userCount = commentCounts.get(interaction.user.id) || 0;
+      
+      if (userCount >= 2) {
+        return interaction.reply({ content: '❌ Você já atingiu o limite de 2 comentários por postagem.', ephemeral: true });
+      }
       
       const comments = postComments.get(postId);
       comments.push({
@@ -1196,8 +1261,108 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         comment: commentText,
         timestamp: Date.now()
       });
+
+      // Atualizar contador de comentários do usuário
+      commentCounts.set(interaction.user.id, userCount + 1);
+      userCommentCount.set(postId, commentCounts);
       
       await interaction.reply({ content: '💬 Comentário adicionado com sucesso!', ephemeral: true });
+    }
+
+    // Handler para deletar comentário (autor)
+    if (interaction.customId.startsWith('delete_comment_modal_')) {
+      const postId = interaction.customId.replace('delete_comment_modal_', '');
+      const commentNumber = parseInt(interaction.fields.getTextInputValue('comment_number'));
+      
+      if (!postComments.has(postId)) {
+        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+      }
+      
+      const comments = postComments.get(postId);
+      
+      if (commentNumber < 1 || commentNumber > comments.length) {
+        return interaction.reply({ content: '❌ Número de comentário inválido.', ephemeral: true });
+      }
+      
+      const deletedComment = comments[commentNumber - 1];
+      comments.splice(commentNumber - 1, 1);
+
+      // Atualizar contador de comentários do usuário
+      const commentCounts = userCommentCount.get(postId) || new Map();
+      const userCount = commentCounts.get(deletedComment.userId) || 0;
+      if (userCount > 0) {
+        commentCounts.set(deletedComment.userId, userCount - 1);
+      }
+      
+      await interaction.reply({ content: '✅ Comentário deletado com sucesso!', ephemeral: true });
+    }
+
+    // Handler para modais do painel administrativo
+    if (interaction.customId === 'admin_delete_post_modal') {
+      const messageId = interaction.fields.getTextInputValue('message_id');
+      
+      try {
+        const message = await interaction.channel.messages.fetch(messageId);
+        await message.delete();
+        
+        // Limpar dados do post se existir
+        for (const [postId, authorId] of postAuthors.entries()) {
+          if (message.author.id === authorId) {
+            postLikes.delete(postId);
+            postComments.delete(postId);
+            postAuthors.delete(postId);
+            postPrivacySettings.delete(postId);
+            userCommentCount.delete(postId);
+            break;
+          }
+        }
+        
+        await interaction.reply({ content: '✅ Postagem deletada com sucesso!', ephemeral: true });
+      } catch (error) {
+        await interaction.reply({ content: '❌ Erro ao deletar postagem. Verifique se o ID da mensagem está correto.', ephemeral: true });
+      }
+    }
+
+    if (interaction.customId === 'admin_delete_comment_modal') {
+      const postId = interaction.fields.getTextInputValue('post_id');
+      const commentNumber = parseInt(interaction.fields.getTextInputValue('comment_number'));
+      
+      if (!postComments.has(postId)) {
+        return interaction.reply({ content: '❌ Post não encontrado. Verifique se o ID da postagem está correto.', ephemeral: true });
+      }
+      
+      const comments = postComments.get(postId);
+      
+      if (commentNumber < 1 || commentNumber > comments.length) {
+        return interaction.reply({ content: '❌ Número de comentário inválido.', ephemeral: true });
+      }
+      
+      // Substituir o comentário por mensagem de restrição
+      comments[commentNumber - 1] = {
+        userId: 'admin',
+        comment: '**comentário restrito pela administração**',
+        timestamp: Date.now()
+      };
+      
+      await interaction.reply({ content: '✅ Comentário restrito com sucesso!', ephemeral: true });
+    }
+
+    if (interaction.customId === 'admin_remove_verified_modal') {
+      const userId = interaction.fields.getTextInputValue('user_id');
+      
+      try {
+        const member = await interaction.guild.members.fetch(userId);
+        const verifiedRoleId = '1392229571599929465';
+        
+        if (member.roles.cache.has(verifiedRoleId)) {
+          await member.roles.remove(verifiedRoleId);
+          await interaction.reply({ content: `✅ Cargo de verificado removido de ${member.user.username}!`, ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ Este usuário não possui o cargo de verificado.', ephemeral: true });
+        }
+      } catch (error) {
+        await interaction.reply({ content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', ephemeral: true });
+      }
     }
 
     if (interaction.customId === 'youtube_modal') {
@@ -2574,6 +2739,194 @@ Thread será arquivada em alguns segundos...
     }, 3000);
   }
 
+  // Handler para botão de configurações
+  if (customId.startsWith('settings_')) {
+    const postId = customId.replace('settings_', '');
+    const authorId = postAuthors.get(postId);
+    
+    if (!authorId) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    if (interaction.user.id !== authorId) {
+      return interaction.reply({ content: '❌ Apenas o autor do post pode acessar as configurações.', ephemeral: true });
+    }
+    
+    const settingsEmbed = new EmbedBuilder()
+      .setTitle('⚙️ Configurações do Post')
+      .setDescription('Selecione uma opção para gerenciar seu post:')
+      .setColor('#9c41ff')
+      .setTimestamp();
+
+    const settingsRow1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`delete_post_${postId}`)
+        .setLabel('Deletar Postagem')
+        .setEmoji('<:delete:1392242553901813881>')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`delete_comment_${postId}`)
+        .setLabel('Deletar Comentário')
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`private_comments_${postId}`)
+        .setLabel('Privar Comentários')
+        .setEmoji('🔒')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const settingsRow2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`private_likes_${postId}`)
+        .setLabel('Privar Curtidas')
+        .setEmoji('❤️')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.reply({ embeds: [settingsEmbed], components: [settingsRow1, settingsRow2], ephemeral: true });
+  }
+
+  // Handler para botões do painel administrativo
+  if (customId === 'admin_delete_post') {
+    const modal = new ModalBuilder()
+      .setCustomId('admin_delete_post_modal')
+      .setTitle('Deletar Postagem - Admin');
+
+    const messageIdInput = new TextInputBuilder()
+      .setCustomId('message_id')
+      .setLabel('ID da Mensagem')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Cole o ID da mensagem aqui')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(messageIdInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  if (customId === 'admin_delete_comment') {
+    const modal = new ModalBuilder()
+      .setCustomId('admin_delete_comment_modal')
+      .setTitle('Deletar Comentário - Admin');
+
+    const postIdInput = new TextInputBuilder()
+      .setCustomId('post_id')
+      .setLabel('ID da Postagem')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: post_1234567890_123456789')
+      .setRequired(true);
+
+    const commentNumberInput = new TextInputBuilder()
+      .setCustomId('comment_number')
+      .setLabel('Número do Comentário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('1, 2, 3, etc.')
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(postIdInput);
+    const row2 = new ActionRowBuilder().addComponents(commentNumberInput);
+    modal.addComponents(row1, row2);
+
+    await interaction.showModal(modal);
+  }
+
+  if (customId === 'admin_remove_verified') {
+    const modal = new ModalBuilder()
+      .setCustomId('admin_remove_verified_modal')
+      .setTitle('Retirar Verificado - Admin');
+
+    const userIdInput = new TextInputBuilder()
+      .setCustomId('user_id')
+      .setLabel('ID do Usuário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('ID do usuário para remover verificação')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(userIdInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Handler para deletar comentário (autor)
+  if (customId.startsWith('delete_comment_')) {
+    const postId = customId.replace('delete_comment_', '');
+    const comments = postComments.get(postId);
+    
+    if (!comments || comments.length === 0) {
+      return interaction.reply({ content: '❌ Nenhum comentário encontrado neste post.', ephemeral: true });
+    }
+
+    const commentsList = comments.map((comment, index) => {
+      const user = client.users.cache.get(comment.userId);
+      const username = user ? user.username : 'Usuário desconhecido';
+      return `**${index + 1}.** ${username}: ${comment.comment.substring(0, 100)}${comment.comment.length > 100 ? '...' : ''}`;
+    }).join('\n');
+
+    const deleteCommentEmbed = new EmbedBuilder()
+      .setTitle('🗑️ Deletar Comentário')
+      .setDescription(`**Comentários neste post:**\n\n${commentsList}`)
+      .setColor('#ff4444')
+      .setTimestamp();
+
+    const deleteCommentRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`confirm_delete_comment_${postId}`)
+        .setLabel('Deletar')
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    await interaction.reply({ embeds: [deleteCommentEmbed], components: [deleteCommentRow], ephemeral: true });
+  }
+
+  // Handler para confirmar deletar comentário
+  if (customId.startsWith('confirm_delete_comment_')) {
+    const postId = customId.replace('confirm_delete_comment_', '');
+    
+    const modal = new ModalBuilder()
+      .setCustomId(`delete_comment_modal_${postId}`)
+      .setTitle('Deletar Comentário');
+
+    const commentNumberInput = new TextInputBuilder()
+      .setCustomId('comment_number')
+      .setLabel('Número do Comentário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('1, 2, 3, etc.')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(commentNumberInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Handler para privar comentários
+  if (customId.startsWith('private_comments_')) {
+    const postId = customId.replace('private_comments_', '');
+    const settings = postPrivacySettings.get(postId);
+    
+    if (settings) {
+      settings.commentsPrivate = !settings.commentsPrivate;
+      const status = settings.commentsPrivate ? 'privados' : 'públicos';
+      await interaction.reply({ content: `✅ Comentários agora estão ${status}.`, ephemeral: true });
+    }
+  }
+
+  // Handler para privar curtidas
+  if (customId.startsWith('private_likes_')) {
+    const postId = customId.replace('private_likes_', '');
+    const settings = postPrivacySettings.get(postId);
+    
+    if (settings) {
+      settings.likesPrivate = !settings.likesPrivate;
+      const status = settings.likesPrivate ? 'privadas' : 'públicas';
+      await interaction.reply({ content: `✅ Curtidas agora estão ${status}.`, ephemeral: true });
+    }
+  }
+
   // Sistema de posts - Handler para botões
   if (customId.startsWith('like_')) {
     const postId = customId.replace('like_', '');
@@ -2594,8 +2947,10 @@ Thread será arquivada em alguns segundos...
     }
     
     // Atualizar botão com novo número de likes
-    const currentRow = interaction.message.components[0];
-    const updatedButtons = currentRow.components.map(button => {
+    const currentRow1 = interaction.message.components[0];
+    const currentRow2 = interaction.message.components[1];
+    
+    const updatedButtons1 = currentRow1.components.map(button => {
       if (button.customId === customId) {
         return new ButtonBuilder()
           .setCustomId(button.customId)
@@ -2620,8 +2975,27 @@ Thread será arquivada em alguns segundos...
       
       return newButton;
     });
+
+    const updatedButtons2 = currentRow2.components.map(button => {
+      const newButton = new ButtonBuilder()
+        .setCustomId(button.customId)
+        .setStyle(button.style);
+      
+      // Só adicionar label se existir e não for null
+      if (button.label && button.label !== null) {
+        newButton.setLabel(button.label);
+      }
+      
+      // Só adicionar emoji se existir
+      if (button.emoji) {
+        newButton.setEmoji(button.emoji);
+      }
+      
+      return newButton;
+    });
     
-    const updatedRow = new ActionRowBuilder().addComponents(updatedButtons);
+    const updatedRow1 = new ActionRowBuilder().addComponents(updatedButtons1);
+    const updatedRow2 = new ActionRowBuilder().addComponents(updatedButtons2);
     
     // Buscar webhook para editar mensagem
     try {
@@ -2631,14 +3005,14 @@ Thread será arquivada em alguns segundos...
       if (webhook) {
         await webhook.editMessage(interaction.message.id, { 
           content: interaction.message.content,
-          components: [updatedRow] 
+          components: [updatedRow1, updatedRow2] 
         });
       }
     } catch (error) {
       console.error('Erro ao atualizar botão via webhook:', error);
       // Fallback: tentar editar diretamente
       try {
-        await interaction.message.edit({ components: [updatedRow] });
+        await interaction.message.edit({ components: [updatedRow1, updatedRow2] });
       } catch (fallbackError) {
         console.error('Erro no fallback:', fallbackError);
       }
@@ -2650,6 +3024,11 @@ Thread será arquivada em alguns segundos...
     
     if (!postLikes.has(postId)) {
       return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+
+    const settings = postPrivacySettings.get(postId);
+    if (settings && settings.likesPrivate) {
+      return interaction.reply({ content: '🔒 A lista de curtidas desta postagem foi privada pelo autor.', ephemeral: true });
     }
     
     const likes = postLikes.get(postId);
@@ -2700,6 +3079,11 @@ Thread será arquivada em alguns segundos...
     if (!postComments.has(postId)) {
       return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
     }
+
+    const settings = postPrivacySettings.get(postId);
+    if (settings && settings.commentsPrivate) {
+      return interaction.reply({ content: '🔒 A lista de comentários desta postagem foi privada pelo autor.', ephemeral: true });
+    }
     
     const comments = postComments.get(postId);
     
@@ -2709,6 +3093,9 @@ Thread será arquivada em alguns segundos...
     
     const commentsList = comments.map((comment, index) => {
       const timestamp = new Date(comment.timestamp).toLocaleString('pt-BR');
+      if (comment.comment === '**comentário restrito pela administração**') {
+        return `**${index + 1}.** ${comment.comment}`;
+      }
       return `**${index + 1}.** <@${comment.userId}> - ${timestamp}\n${comment.comment}`;
     }).join('\n\n');
     
@@ -2721,8 +3108,8 @@ Thread será arquivada em alguns segundos...
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
-  if (customId.startsWith('delete_')) {
-    const postId = customId.replace('delete_', '');
+  if (customId.startsWith('delete_post_')) {
+    const postId = customId.replace('delete_post_', '');
     
     if (!postAuthors.has(postId)) {
       return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
@@ -2734,13 +3121,42 @@ Thread será arquivada em alguns segundos...
       return interaction.reply({ content: '❌ Apenas o autor do post pode deletá-lo.', ephemeral: true });
     }
     
-    // Limpar dados do post
-    postLikes.delete(postId);
-    postComments.delete(postId);
-    postAuthors.delete(postId);
-    
-    await interaction.message.delete();
-    await interaction.reply({ content: '🗑️ Post deletado com sucesso!', ephemeral: true });
+    // Buscar a mensagem original do post no canal
+    try {
+      const channel = client.channels.cache.get('1392228130361708645');
+      const messages = await channel.messages.fetch({ limit: 100 });
+      
+      // Procurar pela mensagem do webhook que corresponde ao post
+      let postMessage = null;
+      for (const message of messages.values()) {
+        if (message.webhookId && message.components && message.components.length > 0) {
+          const firstRow = message.components[0];
+          if (firstRow.components && firstRow.components.length > 0) {
+            const likeButton = firstRow.components.find(button => button.customId && button.customId.includes(postId));
+            if (likeButton) {
+              postMessage = message;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (postMessage) {
+        await postMessage.delete();
+      }
+      
+      // Limpar dados do post
+      postLikes.delete(postId);
+      postComments.delete(postId);
+      postAuthors.delete(postId);
+      postPrivacySettings.delete(postId);
+      userCommentCount.delete(postId);
+      
+      await interaction.reply({ content: '🗑️ Post deletado com sucesso!', ephemeral: true });
+    } catch (error) {
+      console.error('Erro ao deletar post:', error);
+      await interaction.reply({ content: '❌ Erro ao deletar o post.', ephemeral: true });
+    }
   }
 });
 
