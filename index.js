@@ -48,6 +48,11 @@ const client = new Client({
 
 const conversaoEscolha = new Map();
 
+// Maps para armazenar dados dos posts
+const postLikes = new Map(); // postId -> Set de userIds que curtiram
+const postComments = new Map(); // postId -> Array de {userId, comment, timestamp}
+const postAuthors = new Map(); // postId -> authorId
+
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
 
@@ -234,12 +239,230 @@ client.once('ready', async () => {
   });
 
   console.log('Sistema de agendamento automático configurado para todos os canais');
+
+  // Agendamento para postagem mais curtida da semana - todo sábado às 18:00 (BRT)
+  cron.schedule('0 18 * * 6', async () => {
+    await anunciarPostMaisCurtidaDaSemana();
+  }, {
+    timezone: "America/Sao_Paulo"
+  });
+
+  console.log('Sistema de anúncio da postagem mais curtida da semana configurado para sábados às 18:00 (BRT)');
 });
 
 // Mapa para controlar cooldown de menções
 const staffMentionCooldown = new Map();
 
+// Mapa para controlar quem assumiu cada verificação
+const verificationAssignments = new Map();
+
+// Função para anunciar a postagem mais curtida da semana
+async function anunciarPostMaisCurtidaDaSemana() {
+  try {
+    const canalPostsId = '1392228130361708645'; // Canal onde os posts são feitos
+    const canal = client.channels.cache.get(canalPostsId);
+    
+    if (!canal) {
+      console.log('Canal de posts não encontrado');
+      return;
+    }
+
+    // Buscar mensagens da última semana
+    const agora = new Date();
+    const umaSemanaAtras = new Date(agora.getTime() - (7 * 24 * 60 * 60 * 1000));
+    
+    let maisCurtidas = 0;
+    let postMaisCurtido = null;
+    let autorMaisCurtido = null;
+    let anexoMaisCurtido = null;
+    
+    // Buscar através dos dados armazenados
+    for (const [postId, likes] of postLikes.entries()) {
+      const numeroLikes = likes.size;
+      
+      if (numeroLikes > maisCurtidas) {
+        // Verificar se o post é da última semana
+        const timestamp = parseInt(postId.split('_')[1]); // Extrair timestamp do postId
+        const dataPost = new Date(timestamp);
+        
+        if (dataPost >= umaSemanaAtras) {
+          maisCurtidas = numeroLikes;
+          postMaisCurtido = postId;
+          autorMaisCurtido = postAuthors.get(postId);
+        }
+      }
+    }
+
+    if (!postMaisCurtido || maisCurtidas === 0) {
+      console.log('Nenhuma postagem com curtidas encontrada na última semana');
+      return;
+    }
+
+    // Buscar o usuário que fez o post
+    const autorUser = await client.users.fetch(autorMaisCurtido);
+    
+    // Buscar a mensagem original do post para pegar o anexo
+    try {
+      const messages = await canal.messages.fetch({ limit: 100 });
+      let anexoOriginal = null;
+      
+      // Procurar por mensagens do webhook que possam conter o anexo
+      for (const message of messages.values()) {
+        if (message.webhookId && message.createdTimestamp >= umaSemanaAtras.getTime()) {
+          // Verificar se a mensagem tem anexos e corresponde ao período
+          if (message.attachments.size > 0) {
+            const attachment = message.attachments.first();
+            anexoOriginal = attachment;
+            break; // Usar o primeiro anexo encontrado como exemplo
+          }
+        }
+      }
+
+      // Criar embed do anúncio
+      const anuncioEmbed = new EmbedBuilder()
+        .setTitle(' POSTAGEM MAIS CURTIDA DA SEMANA!')
+        .setDescription(`
+** Parabéns para ${autorUser}!**
+
+Esta foi a postagem que mais recebeu curtidas na última semana:
+
+** Estatísticas:**
+• **${maisCurtidas}** curtidas
+• **Autor:** ${autorUser.username}
+• **Data:** Esta semana
+
+** Continue trazendo conteúdo incrível para nossa comunidade!**
+`)
+        .setColor('#FFD700')
+        .setThumbnail(autorUser.displayAvatarURL({ dynamic: true, size: 256 }))
+        .setFooter({ 
+          text: 'GIFZADA - Postagem da Semana', 
+          iconURL: canal.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      // Se tiver anexo, adicionar à embed
+      if (anexoOriginal) {
+        anuncioEmbed.setImage(anexoOriginal.url);
+      }
+
+      // Enviar anúncio no canal
+      await canal.send({
+        content: ` **DESTAQUE DA SEMANA** \n${autorUser}`,
+        embeds: [anuncioEmbed]
+      });
+
+      console.log(`Anúncio da postagem mais curtida enviado: ${maisCurtidas} curtidas de ${autorUser.username}`);
+
+    } catch (error) {
+      console.error('Erro ao buscar anexo original:', error);
+      
+      // Enviar anúncio sem anexo em caso de erro
+      const anuncioEmbed = new EmbedBuilder()
+        .setTitle(' POSTAGEM MAIS CURTIDA DA SEMANA!')
+        .setDescription(`
+** Parabéns para ${autorUser}!**
+
+Esta foi a postagem que mais recebeu curtidas na última semana:
+
+** Estatísticas:**
+• **${maisCurtidas}** curtidas
+• **Autor:** ${autorUser.username}
+• **Data:** Esta semana
+
+** Continue trazendo conteúdo incrível para nossa comunidade!**
+`)
+        .setColor('#FFD700')
+        .setThumbnail(autorUser.displayAvatarURL({ dynamic: true, size: 256 }))
+        .setFooter({ 
+          text: 'GIFZADA - Postagem da Semana', 
+          iconURL: canal.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await canal.send({
+        content: ` **DESTAQUE DA SEMANA** \n${autorUser}`,
+        embeds: [anuncioEmbed]
+      });
+
+      console.log(`Anúncio da postagem mais curtida enviado (sem anexo): ${maisCurtidas} curtidas de ${autorUser.username}`);
+    }
+
+  } catch (error) {
+    console.error('Erro ao anunciar postagem mais curtida da semana:', error);
+  }
+}
+
 client.on('messageCreate', async message => {
+  // Sistema de webhook para anexos do cargo específico
+  if (message.channel.id === '1392228130361708645' && 
+      message.member && 
+      message.member.roles.cache.has('1392229571599929465') && 
+      message.attachments.size > 0) {
+    
+    const attachment = message.attachments.first();
+    const postId = `post_${Date.now()}_${message.author.id}`;
+    
+    // Inicializar dados do post
+    postLikes.set(postId, new Set());
+    postComments.set(postId, []);
+    postAuthors.set(postId, message.author.id);
+    
+    // Criar webhook
+    const webhooks = await message.channel.fetchWebhooks();
+    let webhook = webhooks.find(wh => wh.name === 'Post System');
+    
+    if (!webhook) {
+      webhook = await message.channel.createWebhook({
+        name: 'Post System',
+        avatar: message.guild.iconURL()
+      });
+    }
+    
+    // Criar botões
+    const postButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`like_${postId}`)
+        .setLabel('0')
+        .setEmoji('<:like:1392240788955598930>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`show_likes_${postId}`)
+        .setEmoji('<:like_h:1392241390053883965>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`comment_${postId}`)
+        .setEmoji('<:comment:1392242013822521465>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`show_comments_${postId}`)
+        .setEmoji('<:comments:1392242423186329693>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`delete_${postId}`)
+        .setEmoji('<:delete:1392242553901813881>')
+        .setStyle(ButtonStyle.Danger)
+    );
+    
+    // Baixar e reenviar o arquivo para garantir permanência
+    const response = await fetch(attachment.url);
+    const buffer = await response.buffer();
+    const fileAttachment = new AttachmentBuilder(buffer, { name: attachment.name });
+    
+    // Enviar via webhook
+    await webhook.send({
+      content: ` Post de ${message.author}`,
+      files: [fileAttachment],
+      username: message.author.displayName || message.author.username,
+      avatarURL: message.author.displayAvatarURL({ dynamic: true }),
+      components: [postButtons]
+    });
+    
+    // Deletar mensagem original
+    await message.delete();
+    return;
+  }
+
   // Sistema !sejamaker (apenas staff)
   if (message.content === '!sejamaker') {
     // Verificar se o usuário tem o cargo de staff
@@ -395,6 +618,39 @@ client.on('messageCreate', async message => {
     );
 
     await message.channel.send({ embeds: [embed], components: [row1] });
+  }
+
+  if (message.content === '!verificar') {
+    const verificationEmbed = new EmbedBuilder()
+      .setTitle('**Verificação**')
+      .setDescription(`
+> Manter o ambiente seguro e verdadeiro é essencial para todos.
+
+<:d_arrow:1366582051507273728>  **Por que verificar?**
+> A autenticação comprova que você é realmente quem diz ser. Isso ajuda a manter a confiança entre os membros e libera o acesso aos canais de mídia.
+
+**Etapas do processo:**
+<:d_dot43:1366581992413728830>  Mostre seu rosto em tempo real a um dos admins listados;
+<:d_dot43:1366581992413728830> Suas informações não serão compartilhadas com ninguém além da equipe responsável.
+
+**Equipe principal de verificação:**
+<@889317995397140500> • <@309686166460956672> • <@1032510101753446421> • <@1217811542012198926>
+
+<:d_dot43:1366581992413728830>  Este espaço é reservado apenas para imagens reais do seu próprio rosto.
+<:d_dot43:1366581992413728830>  Evite usar fotos de outras pessoas ou qualquer conteúdo enganoso.
+<:d_dot43:1366581992413728830>  Quebrar essas regras pode resultar na perda da verificação.
+`)
+      .setColor('#9c41ff')
+      .setTimestamp();
+
+    const verificationRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('verificar_se')
+        .setLabel('Verificar-se')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
   }
 });
 
@@ -923,6 +1179,25 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
         ephemeral: true 
       });
+    }
+
+    // Handler para modal de comentários
+    if (interaction.customId.startsWith('comment_modal_')) {
+      const postId = interaction.customId.replace('comment_modal_', '');
+      const commentText = interaction.fields.getTextInputValue('comment_text');
+      
+      if (!postComments.has(postId)) {
+        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+      }
+      
+      const comments = postComments.get(postId);
+      comments.push({
+        userId: interaction.user.id,
+        comment: commentText,
+        timestamp: Date.now()
+      });
+      
+      await interaction.reply({ content: '💬 Comentário adicionado com sucesso!', ephemeral: true });
     }
 
     if (interaction.customId === 'youtube_modal') {
@@ -1759,6 +2034,82 @@ GIFs: Todos os tipos (animados e estáticos)
     await interaction.reply({ embeds: [supportEmbed], ephemeral: true });
   }
 
+  // Handler para verificação
+  if (customId === 'verificar_se') {
+    try {
+      // Adicionar cargo temporário de verificação
+      const tempVerificationRoleId = '1392263610616778752';
+      const member = interaction.guild.members.cache.get(user.id);
+      
+      if (member) {
+        await member.roles.add(tempVerificationRoleId);
+        console.log(`Cargo temporário de verificação adicionado para ${user.username}`);
+      }
+    } catch (error) {
+      console.error('Erro ao adicionar cargo temporário:', error);
+    }
+
+    const starterMessage = await channel.send({
+      content: '‎',
+      allowedMentions: { users: [] }
+    });
+
+    const thread = await starterMessage.startThread({
+      name: `🔍・Verificação - ${user.username}`,
+      autoArchiveDuration: 1440,
+      reason: 'Processo de verificação'
+    });
+
+    starterMessage.delete().catch(() => {});
+
+    const verificationEmbed = new EmbedBuilder()
+      .setTitle('**Olá! Bem-vindo(a) ao processo de verificação.**')
+      .setDescription(`
+Entre em um canal de voz, ligue sua câmera e siga as etapas que o verificador pedir.
+A verificação é rápida e serve apenas para confirmar que você é uma pessoa real, garantindo mais segurança e autenticidade na comunidade.
+
+**Algumas orientações importantes:**
+<:d_dot43:1366581992413728830>   Esteja com boa iluminação;
+<:d_dot43:1366581992413728830>   A verificação é individual — evite chamar outras pessoas junto;
+<:d_dot43:1366581992413728830>   Nenhuma gravação será feita e nenhuma imagem será salva;
+<:d_dot43:1366581992413728830>  Aguarde o verificador disponível no canal, ele irá conduzir tudo.
+
+<:d_arrow:1366582051507273728> Com a verificação concluída, você terá acesso ao canal de **Instagram** e poderá enviar mídias no canal geral.
+
+Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou aguarde o atendimento.
+
+**Obrigado por colaborar.**
+`)
+      .setColor('#9c41ff')
+      .setTimestamp();
+
+    const verificationButtonsRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('assumir_verificacao')
+        .setLabel('Assumir Verificação')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`verificar_usuario_${user.id}`)
+        .setLabel('Verificar')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('encerrar_verificacao')
+        .setLabel('Encerrar')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    await thread.send({ 
+      content: `${user} <@&1392247839857315912>`, 
+      embeds: [verificationEmbed], 
+      components: [verificationButtonsRow] 
+    });
+
+    await interaction.reply({ 
+      content: `**Seu processo de verificação foi iniciado!** ${thread}`, 
+      ephemeral: true 
+    });
+  }
+
   // Handler para encerrar thread
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
@@ -2012,6 +2363,384 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
       embeds: [cancelEmbed],
       components: [disabledRow]
     });
+  }
+
+  // Handler para verificar usuário (apenas staff)
+  if (customId.startsWith('verificar_usuario_')) {
+    const verificationStaffRoleId = '1392247839857315912';
+    
+    if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
+      return interaction.reply({
+        content: '❌ Apenas membros da equipe de verificação podem usar este botão.',
+        ephemeral: true
+      });
+    }
+
+    // Verificar se este staff assumiu a verificação
+    const assignedStaffId = verificationAssignments.get(interaction.channel.id);
+    if (assignedStaffId && assignedStaffId !== interaction.user.id) {
+      return interaction.reply({
+        content: '❌ Apenas o staff que assumiu esta verificação pode usar este botão.',
+        ephemeral: true
+      });
+    }
+
+    const userId = customId.replace('verificar_usuario_', '');
+    const targetMember = interaction.guild.members.cache.get(userId);
+
+    if (!targetMember) {
+      return interaction.reply({
+        content: '❌ Usuário não encontrado no servidor.',
+        ephemeral: true
+      });
+    }
+
+    try {
+      // Cargos de verificação
+      const verifiedRoleId = '1392229571599929465';
+      const tempVerificationRoleId = '1392263610616778752';
+      
+      // Adicionar cargo de verificado
+      await targetMember.roles.add(verifiedRoleId);
+      
+      // Remover cargo temporário de verificação
+      try {
+        await targetMember.roles.remove(tempVerificationRoleId);
+        console.log(`Cargo temporário de verificação removido de ${targetMember.user.username}`);
+      } catch (tempRoleError) {
+        console.error('Erro ao remover cargo temporário:', tempRoleError);
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Verificação Concluída')
+        .setDescription(`
+**${targetMember.user.username}** foi verificado com sucesso!
+
+**Cargo adicionado:**
+• <@&${verifiedRoleId}>
+
+**Verificado por:** ${interaction.user}
+`)
+        .setColor('#00ff00')
+        .setThumbnail(targetMember.user.displayAvatarURL({ dynamic: true }))
+        .setTimestamp();
+
+      await interaction.reply({
+        embeds: [successEmbed]
+      });
+
+      // Aguardar 3 segundos antes de arquivar
+      setTimeout(async () => {
+        try {
+          // Limpar o registro de quem assumiu a verificação
+          verificationAssignments.delete(interaction.channel.id);
+          await interaction.channel.setArchived(true);
+        } catch (error) {
+          console.error('Erro ao arquivar thread de verificação:', error);
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error('Erro ao adicionar cargo de verificado:', error);
+      await interaction.reply({
+        content: '❌ Erro ao adicionar o cargo de verificado. Verifique se o bot tem permissões adequadas.',
+        ephemeral: true
+      });
+    }
+  }
+
+  // Handler para assumir verificação (apenas staff)
+  if (customId === 'assumir_verificacao') {
+    const verificationStaffRoleId = '1392247839857315912';
+    
+    if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
+      return interaction.reply({
+        content: '❌ Apenas membros da equipe de verificação podem assumir verificações.',
+        ephemeral: true
+      });
+    }
+
+    // Registrar quem assumiu esta verificação
+    verificationAssignments.set(interaction.channel.id, interaction.user.id);
+
+    // Desabilitar o botão "Assumir Verificação"
+    const buttonRow = interaction.message.components[0];
+    if (buttonRow) {
+      const buttons = buttonRow.components.map(button => {
+        const newButton = new ButtonBuilder()
+          .setCustomId(button.customId)
+          .setLabel(button.label)
+          .setStyle(button.style);
+
+        if (button.customId === 'assumir_verificacao') {
+          newButton.setDisabled(true);
+        }
+
+        return newButton;
+      });
+
+      const updatedRow = new ActionRowBuilder().addComponents(buttons);
+
+      try {
+        await interaction.message.edit({
+          components: [updatedRow],
+        });
+      } catch (error) {
+        console.error('Erro ao editar mensagem:', error);
+      }
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('✅ Verificação Assumida')
+      .setDescription(`Esta verificação foi assumida por ${interaction.user}.`)
+      .setColor('#00ff00')
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
+  }
+
+  // Handler para encerrar verificação (apenas staff)
+  if (customId === 'encerrar_verificacao') {
+    const verificationStaffRoleId = '1392247839857315912';
+    
+    if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
+      return interaction.reply({
+        content: '❌ Apenas membros da equipe de verificação podem usar este botão.',
+        ephemeral: true
+      });
+    }
+
+    // Verificar se este staff assumiu a verificação
+    const assignedStaffId = verificationAssignments.get(interaction.channel.id);
+    if (assignedStaffId && assignedStaffId !== interaction.user.id) {
+      return interaction.reply({
+        content: '❌ Apenas o staff que assumiu esta verificação pode usar este botão.',
+        ephemeral: true
+      });
+    }
+
+    // Encontrar o usuário que iniciou a verificação através do nome da thread
+    const threadName = interaction.channel.name;
+    const usernameMatch = threadName.match(/🔍・Verificação - (.+)/);
+    
+    if (usernameMatch) {
+      const username = usernameMatch[1];
+      // Buscar o membro pelo nome de usuário na thread
+      const messages = await interaction.channel.messages.fetch({ limit: 50 });
+      const firstMessage = messages.last();
+      
+      if (firstMessage && firstMessage.mentions.users.size > 0) {
+        const mentionedUser = firstMessage.mentions.users.first();
+        const member = interaction.guild.members.cache.get(mentionedUser.id);
+        
+        if (member) {
+          try {
+            // Remover cargo temporário de verificação
+            const tempVerificationRoleId = '1392263610616778752';
+            await member.roles.remove(tempVerificationRoleId);
+            console.log(`Cargo temporário de verificação removido de ${member.user.username} (verificação encerrada)`);
+          } catch (tempRoleError) {
+            console.error('Erro ao remover cargo temporário no encerramento:', tempRoleError);
+          }
+        }
+      }
+    }
+
+    const encerrarEmbed = new EmbedBuilder()
+      .setTitle('🔒 Verificação Encerrada')
+      .setDescription(`
+Este processo de verificação foi encerrado por ${interaction.user}.
+
+**Status:** Finalizado sem verificação
+**Encerrado em:** ${new Date().toLocaleString('pt-BR')}
+
+Thread será arquivada em alguns segundos...
+`)
+      .setColor('#ff4444')
+      .setFooter({ text: 'GIFZADA VERIFICAÇÃO • Processo Finalizado' })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [encerrarEmbed] });
+
+    // Aguardar 3 segundos antes de arquivar
+    setTimeout(async () => {
+      try {
+        // Limpar o registro de quem assumiu a verificação
+        verificationAssignments.delete(interaction.channel.id);
+        await interaction.channel.setArchived(true);
+      } catch (error) {
+        console.error('Erro ao arquivar thread de verificação:', error);
+      }
+    }, 3000);
+  }
+
+  // Sistema de posts - Handler para botões
+  if (customId.startsWith('like_')) {
+    const postId = customId.replace('like_', '');
+    const userId = interaction.user.id;
+    
+    if (!postLikes.has(postId)) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    const likes = postLikes.get(postId);
+    
+    if (likes.has(userId)) {
+      likes.delete(userId);
+      await interaction.reply({ content: '<:unlike:1392244549468033126> Você removeu seu like!', ephemeral: true });
+    } else {
+      likes.add(userId);
+      await interaction.reply({ content: '<:like:1392240788955598930> Você curtiu este post!', ephemeral: true });
+    }
+    
+    // Atualizar botão com novo número de likes
+    const currentRow = interaction.message.components[0];
+    const updatedButtons = currentRow.components.map(button => {
+      if (button.customId === customId) {
+        return new ButtonBuilder()
+          .setCustomId(button.customId)
+          .setLabel(likes.size.toString())
+          .setEmoji('<:like:1392240788955598930>')
+          .setStyle(ButtonStyle.Secondary);
+      }
+      
+      const newButton = new ButtonBuilder()
+        .setCustomId(button.customId)
+        .setStyle(button.style);
+      
+      // Só adicionar label se existir e não for null
+      if (button.label && button.label !== null) {
+        newButton.setLabel(button.label);
+      }
+      
+      // Só adicionar emoji se existir
+      if (button.emoji) {
+        newButton.setEmoji(button.emoji);
+      }
+      
+      return newButton;
+    });
+    
+    const updatedRow = new ActionRowBuilder().addComponents(updatedButtons);
+    
+    // Buscar webhook para editar mensagem
+    try {
+      const webhooks = await interaction.channel.fetchWebhooks();
+      const webhook = webhooks.find(wh => wh.name === 'Post System');
+      
+      if (webhook) {
+        await webhook.editMessage(interaction.message.id, { 
+          content: interaction.message.content,
+          components: [updatedRow] 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar botão via webhook:', error);
+      // Fallback: tentar editar diretamente
+      try {
+        await interaction.message.edit({ components: [updatedRow] });
+      } catch (fallbackError) {
+        console.error('Erro no fallback:', fallbackError);
+      }
+    }
+  }
+
+  if (customId.startsWith('show_likes_')) {
+    const postId = customId.replace('show_likes_', '');
+    
+    if (!postLikes.has(postId)) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    const likes = postLikes.get(postId);
+    
+    if (likes.size === 0) {
+      return interaction.reply({ content: '💔 Nenhuma curtida ainda.', ephemeral: true });
+    }
+    
+    const likesList = Array.from(likes).map(userId => `<@${userId}>`).join('\n');
+    
+    const embed = new EmbedBuilder()
+      .setTitle('❤️ Curtidas')
+      .setDescription(`**${likes.size} pessoa(s) curtiram:**\n\n${likesList}`)
+      .setColor('#ff69b4')
+      .setTimestamp();
+    
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  if (customId.startsWith('comment_')) {
+    const postId = customId.replace('comment_', '');
+    
+    if (!postComments.has(postId)) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    const modal = new ModalBuilder()
+      .setCustomId(`comment_modal_${postId}`)
+      .setTitle('💬 Adicionar Comentário');
+
+    const commentInput = new TextInputBuilder()
+      .setCustomId('comment_text')
+      .setLabel('Seu comentário')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Escreva seu comentário aqui...')
+      .setMaxLength(1000)
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(commentInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  if (customId.startsWith('show_comments_')) {
+    const postId = customId.replace('show_comments_', '');
+    
+    if (!postComments.has(postId)) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    const comments = postComments.get(postId);
+    
+    if (comments.length === 0) {
+      return interaction.reply({ content: '💬 Nenhum comentário ainda.', ephemeral: true });
+    }
+    
+    const commentsList = comments.map((comment, index) => {
+      const timestamp = new Date(comment.timestamp).toLocaleString('pt-BR');
+      return `**${index + 1}.** <@${comment.userId}> - ${timestamp}\n${comment.comment}`;
+    }).join('\n\n');
+    
+    const embed = new EmbedBuilder()
+      .setTitle('💬 Comentários')
+      .setDescription(commentsList)
+      .setColor('#4169e1')
+      .setTimestamp();
+    
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  if (customId.startsWith('delete_')) {
+    const postId = customId.replace('delete_', '');
+    
+    if (!postAuthors.has(postId)) {
+      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+    }
+    
+    const authorId = postAuthors.get(postId);
+    
+    if (interaction.user.id !== authorId) {
+      return interaction.reply({ content: '❌ Apenas o autor do post pode deletá-lo.', ephemeral: true });
+    }
+    
+    // Limpar dados do post
+    postLikes.delete(postId);
+    postComments.delete(postId);
+    postAuthors.delete(postId);
+    
+    await interaction.message.delete();
+    await interaction.reply({ content: '🗑️ Post deletado com sucesso!', ephemeral: true });
   }
 });
 
