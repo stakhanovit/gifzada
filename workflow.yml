@@ -1,2 +1,0 @@
-- name: Instalar ffmpeg
-  run: sudo apt-get update && sudo apt-get install -y ffmpeg
