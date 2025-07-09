@@ -19,7 +19,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 ffmpeg.setFfmpegPath(ffmpegPath); 
 const { execFile } = require('child_process');
-const gifsicle = require('gifsicle');
+let gifsicle;
 const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
@@ -133,6 +133,15 @@ const blockedVerificationUsers = new Set(); // userIds bloqueados
 
 client.once('ready', async () => {
   console.log(`Logado como ${client.user.tag}`);
+
+  // Importar gifsicle dinamicamente
+  try {
+    const gifsicleModule = await import('gifsicle');
+    gifsicle = gifsicleModule.default;
+    console.log('Gifsicle importado com sucesso');
+  } catch (error) {
+    console.error('Erro ao importar gifsicle:', error);
+  }
 
   // Registrar comandos slas
   const commands = [
@@ -3741,6 +3750,10 @@ async function processFile(attachment, type, percentage = null) {
     }
 
     case 'resize-gif': {
+      if (!gifsicle) {
+        throw new Error('Gifsicle não está disponível. Tente novamente em alguns segundos.');
+      }
+
       const response = await fetch(url);
       const buffer = await response.buffer();
       const input = `in_${nomeBase}.gif`;
@@ -3792,6 +3805,10 @@ async function processFile(attachment, type, percentage = null) {
         const cropSize = Math.min(width, height);
         const left = Math.floor((width - cropSize) / 2);
         const top = Math.floor((height - cropSize) / 2);
+
+        if (!gifsicle) {
+          throw new Error('Gifsicle não está disponível. Tente novamente em alguns segundos.');
+        }
 
         await new Promise((resolve, reject) => {
           execFile(gifsicle, [
