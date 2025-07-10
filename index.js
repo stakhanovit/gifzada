@@ -269,7 +269,7 @@ client.once('ready', async () => {
         const canalInfo = canalHorarios.find(c => c.id === channelId);
         const horarioFechamento = canalInfo ? canalInfo.fecha : 'horário programado';
 
-        await channel.send(`<:a_gifzada:1266774740115132468> Aberto <:a_gifzada:1266774740115132468>!\nEstaremos aberto até às ${horarioFechamento}h (BRT).`);
+        await channel.send(`<:a_gifzada:1266774740115132468> **Aberto!**\nEstaremos aberto até às **${horarioFechamento}h (BRT)**.`);
         console.log(`Canal ${channel.name} foi automaticamente desbloqueado às ${horario}`);
 
       } else if (acao === 'fechar') {
@@ -294,7 +294,7 @@ client.once('ready', async () => {
         const canalInfo = canalHorarios.find(c => c.id === channelId);
         const horarioAbertura = canalInfo ? canalInfo.abre : 'horário programado';
 
-        await channel.send(`<:a_gifzada:1266774740115132468> Fechado <:a_gifzada:1266774740115132468>!\nAbriremos novamente amanhã às ${horarioAbertura}h (BRT).`);
+        await channel.send(`<:a_gifzada:1266774740115132468> **Fechado!**\nAbriremos novamente amanhã às **${horarioAbertura}h (BRT)**.`);
         console.log(`Canal ${channel.name} foi automaticamente bloqueado às ${horario}`);
       }
 
