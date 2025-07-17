@@ -1890,6 +1890,23 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       if (selectedType) {
         await handleConversionOption(interaction, selectedType);
+      } else if (selectedOption === 'download_tiktok') {
+        // Handler específico para TikTok download
+        const modal = new ModalBuilder()
+          .setCustomId('tiktok_download_modal')
+          .setTitle('📱 Download TikTok');
+
+        const tiktokInput = new TextInputBuilder()
+          .setCustomId('tiktok_url')
+          .setLabel('Link do TikTok')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('https://www.tiktok.com/@user/video/...')
+          .setRequired(true);
+
+        const row1 = new ActionRowBuilder().addComponents(tiktokInput);
+        modal.addComponents(row1);
+
+        await interaction.showModal(modal);
       }
     }
     return;
@@ -2268,7 +2285,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (customId === 'download_tiktok') {
         const modal = new ModalBuilder()
           .setCustomId('tiktok_download_modal')
-          .setTitle('Download TikTok Video');
+          .setTitle('📱 Download TikTok');
 
         const tiktokInput = new TextInputBuilder()
           .setCustomId('tiktok_url')
@@ -2503,25 +2520,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     }
   }
 
-  // Handler para download TikTok
-  if (customId === 'download_tiktok') {
-    const modal = new ModalBuilder()
-      .setCustomId('tiktok_download_modal')
-      .setTitle('Download TikTok Video');
-
-    const tiktokInput = new TextInputBuilder()
-      .setCustomId('tiktok_url')
-      .setLabel('Link do TikTok')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('https://www.tiktok.com/@user/video/...')
-      .setRequired(true);
-
-    const row1 = new ActionRowBuilder().addComponents(tiktokInput);
-    modal.addComponents(row1);
-
-    await interaction.showModal(modal);
-    return;
-  }
+  
 
   // Handlers para botões de suporte
   if (customId === 'receba_ajuda') {
