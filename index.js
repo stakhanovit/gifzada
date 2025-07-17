@@ -1870,28 +1870,8 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     if (interaction.customId === 'conversion_select') {
       const selectedOption = interaction.values[0];
 
-      // Mapear para os handlers existentes
-      const optionMap = {
-        'video_to_gif': 'video_to_gif',
-        'resize_gif': 'resize_gif', 
-        'crop_image': 'crop_image',
-        'stretch_image': 'stretch_image',
-        'discord_banner': 'discord_banner',
-        'format_convert': 'format_convert',
-        'rename_files': 'rename_files',
-        'separate_resolution': 'separate_resolution',
-        'color_extractor': 'color_extractor',
-        'youtube_to_gif': 'youtube_to_gif',
-        'download_tiktok': 'download_tiktok'
-      };
-
-      // Processar diretamente com a interação original
-      const selectedType = optionMap[selectedOption];
-
-      if (selectedType) {
-        await handleConversionOption(interaction, selectedType);
-      } else if (selectedOption === 'download_tiktok') {
-        // Handler específico para TikTok download
+      // Handler específico para download TikTok
+      if (selectedOption === 'download_tiktok') {
         const modal = new ModalBuilder()
           .setCustomId('tiktok_download_modal')
           .setTitle('📱 Download TikTok');
@@ -1907,6 +1887,28 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         modal.addComponents(row1);
 
         await interaction.showModal(modal);
+        return;
+      }
+
+      // Mapear para os outros handlers existentes
+      const optionMap = {
+        'video_to_gif': 'video_to_gif',
+        'resize_gif': 'resize_gif', 
+        'crop_image': 'crop_image',
+        'stretch_image': 'stretch_image',
+        'discord_banner': 'discord_banner',
+        'format_convert': 'format_convert',
+        'rename_files': 'rename_files',
+        'separate_resolution': 'separate_resolution',
+        'color_extractor': 'color_extractor',
+        'youtube_to_gif': 'youtube_to_gif'
+      };
+
+      // Processar diretamente com a interação original
+      const selectedType = optionMap[selectedOption];
+
+      if (selectedType) {
+        await handleConversionOption(interaction, selectedType);
       }
     }
     return;
@@ -2281,25 +2283,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         return;
       }
 
-      // Handler para download TikTok
-      if (customId === 'download_tiktok') {
-        const modal = new ModalBuilder()
-          .setCustomId('tiktok_download_modal')
-          .setTitle('📱 Download TikTok');
-
-        const tiktokInput = new TextInputBuilder()
-          .setCustomId('tiktok_url')
-          .setLabel('Link do TikTok')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('https://www.tiktok.com/@user/video/...')
-          .setRequired(true);
-
-        const row1 = new ActionRowBuilder().addComponents(tiktokInput);
-        modal.addComponents(row1);
-
-        await interaction.showModal(modal);
-        return;
-      }
+      
 
       // Para outros tipos, definir escolha e responder
       conversaoEscolha.set(interaction.channel.id, tipos[customId]);
