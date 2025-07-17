@@ -10,7 +10,8 @@ const {
   AttachmentBuilder,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  StringSelectMenuBuilder
 } = require('discord.js');
 const fs = require('fs');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
@@ -870,6 +871,14 @@ client.on('interactionCreate', async interaction => {
       '1065441742301704202'
     ];
 
+    // Verificar se o member existe
+    if (!member) {
+      return interaction.reply({
+        content: '❌ Não foi possível verificar suas permissões. Tente novamente.',
+        ephemeral: true
+      });
+    }
+
     // Verificar se o usuário tem algum dos cargos autorizados
     const hasAuthorizedRole = member.roles.cache.some(role => authorizedRoles.includes(role.id));
 
@@ -1644,6 +1653,80 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
+    if (interaction.customId === 'stretch_image_modal') {
+      const width = parseInt(interaction.fields.getTextInputValue('width'));
+      const height = parseInt(interaction.fields.getTextInputValue('height'));
+      const mode = interaction.fields.getTextInputValue('mode') || 'stretch';
+
+      if (isNaN(width) || isNaN(height) || width < 1 || height < 1) {
+        return interaction.reply({
+          content: '❌ Por favor, insira dimensões válidas (números positivos).',
+          ephemeral: true
+        });
+      }
+
+      conversaoEscolha.set(interaction.channel.id, { 
+        type: 'stretch-image', 
+        width: width, 
+        height: height, 
+        mode: mode 
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle(' **OPÇÃO SELECIONADA**')
+        .setDescription(`**Esticar Imagem** selecionado!\n> **Dimensões:** ${width}x${height}px\n> **Modo:** ${mode}\n> Envie sua imagem para redimensionar`)
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
+
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    }
+
+    if (interaction.customId === 'format_convert_modal') {
+      const targetFormat = interaction.fields.getTextInputValue('target_format').toLowerCase();
+      const quality = parseInt(interaction.fields.getTextInputValue('quality')) || 90;
+
+      const validFormats = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff'];
+      if (!validFormats.includes(targetFormat)) {
+        return interaction.reply({
+          content: '❌ Formato inválido. Use: png, jpg, webp, gif, bmp ou tiff.',
+          ephemeral: true
+        });
+      }
+
+      conversaoEscolha.set(interaction.channel.id, { 
+        type: 'format-convert', 
+        format: targetFormat,
+        quality: quality
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle(' **OPÇÃO SELECIONADA**')
+        .setDescription(`**Converter Formato** selecionado!\n> **Para:** ${targetFormat.toUpperCase()}\n> **Qualidade:** ${quality}%\n> Envie seu arquivo para converter`)
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
+
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    }
+
+    if (interaction.customId === 'rename_files_modal') {
+      const pattern = interaction.fields.getTextInputValue('pattern');
+      const startNumber = parseInt(interaction.fields.getTextInputValue('start_number')) || 1;
+
+      conversaoEscolha.set(interaction.channel.id, { 
+        type: 'rename-files', 
+        pattern: pattern,
+        startNumber: startNumber
+      });
+
+      const embed = new EmbedBuilder()
+        .setTitle(' **OPÇÃO SELECIONADA**')
+        .setDescription(`**Renomear Arquivos** selecionado!\n> **Padrão:** ${pattern}\n> **Início:** ${startNumber}\n> Envie seus arquivos para renomear`)
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode enviar múltiplos arquivos!' });
+
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    }
+
     if (interaction.customId === 'tiktok_download_modal') {
       const tiktokUrl = interaction.fields.getTextInputValue('tiktok_url');
 
@@ -1782,6 +1865,36 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     return;
   }
 
+  // Handler para Select Menu de conversão
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === 'conversion_select') {
+      const selectedOption = interaction.values[0];
+
+      // Mapear para os handlers existentes
+      const optionMap = {
+        'video_to_gif': 'video_to_gif',
+        'resize_gif': 'resize_gif', 
+        'crop_image': 'crop_image',
+        'stretch_image': 'stretch_image',
+        'discord_banner': 'discord_banner',
+        'format_convert': 'format_convert',
+        'rename_files': 'rename_files',
+        'separate_resolution': 'separate_resolution',
+        'color_extractor': 'color_extractor',
+        'youtube_to_gif': 'youtube_to_gif',
+        'download_tiktok': 'download_tiktok'
+      };
+
+      // Processar diretamente com a interação original
+      const selectedType = optionMap[selectedOption];
+
+      if (selectedType) {
+        await handleConversionOption(interaction, selectedType);
+      }
+    }
+    return;
+  }
+
   if (!interaction.isButton()) return;
 
   const { customId, user, channel } = interaction;
@@ -1832,6 +1945,36 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 \`•\` Detecção da melhor área de corte
 \`•\` Suporte a imagens e GIFs animados
 
+### <:d_arrow:1366582051507273728> **Esticar Imagem**
+\`•\` Redimensiona imagem para resolução específica
+\`•\` Estica proporcionalmente ou forçado
+\`•\` Ideal para banners e wallpapers
+
+### <:d_arrow:1366582051507273728> **Banner Discord**
+\`•\` Corta GIF/imagem para 734x293px
+\`•\` Formato perfeito para banner do Discord
+\`•\` Preserva qualidade e movimento
+
+### <:d_arrow:1366582051507273728> **Conversões de Formato**
+\`•\` WEBP → PNG, JPG → PNG, etc
+\`•\` Múltiplos formatos suportados
+\`•\` Preservação da qualidade
+
+### <:d_arrow:1366582051507273728> **Renomear Arquivos**
+\`•\` Renomeia múltiplos arquivos em lote
+\`•\` Padrões personalizados
+\`•\` Numeração automática
+
+### <:d_arrow:1366582051507273728> **Separar por Resolução**
+\`•\` Separa PFP (1:1) e Banners
+\`•\` Detecção automática
+\`•\` Organização inteligente
+
+### <:d_arrow:1366582051507273728> **Extrator de Cores**
+\`•\` Extrai HEX, RGB, HSL
+\`•\` Cores dominantes da imagem
+\`•\` Paleta completa
+
 ### <:d_arrow:1366582051507273728> **YouTube → GIF**
 \`•\` Cole o link do YouTube
 \`•\` Conversão direta para GIF
@@ -1850,42 +1993,91 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       })
       .setTimestamp();
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('video_to_gif')
-        .setLabel('Vídeo para GIF')
-        .setEmoji('<:videotogif:1366159226891931688>')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('resize_gif')
-        .setLabel('Redimensionar GIF')
-        .setEmoji('<:resize:1366160012774477824>')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('crop_image')
-        .setLabel('Cortar Imagem')
-        .setEmoji('<:crop:1366160563872202892>')
-        .setStyle(ButtonStyle.Secondary)
-    );
+    const { StringSelectMenuBuilder } = require('discord.js');
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('conversion_select')
+      .setPlaceholder('🎯 Escolha o tipo de conversão desejada')
+      .addOptions([
+        {
+          label: 'Vídeo para GIF',
+          description: 'Converte vídeos em GIFs de alta qualidade',
+          value: 'video_to_gif',
+          emoji: '<:videotogif:1366159226891931688>'
+        },
+        {
+          label: 'Redimensionar GIF',
+          description: 'Reduz tamanho mantendo qualidade visual',
+          value: 'resize_gif',
+          emoji: '<:resize:1366160012774477824>'
+        },
+        {
+          label: 'Cortar Imagem/GIF',
+          description: 'Recorte automático em proporção 1:1',
+          value: 'crop_image',
+          emoji: '<:crop:1366160563872202892>'
+        },
+        {
+          label: 'Esticar Imagem',
+          description: 'Redimensiona para resolução específica',
+          value: 'stretch_image',
+          emoji: '📏'
+        },
+        {
+          label: 'Banner Discord',
+          description: 'Corta para formato 734x293px',
+          value: 'discord_banner',
+          emoji: '🖼️'
+        },
+        {
+          label: 'Converter Formato',
+          description: 'Converte entre diferentes formatos',
+          value: 'format_convert',
+          emoji: '🔄'
+        },
+        {
+          label: 'Renomear Arquivos',
+          description: 'Renomeia múltiplos arquivos em lote',
+          value: 'rename_files',
+          emoji: '📝'
+        },
+        {
+          label: 'Separar por Resolução',
+          description: 'Separa PFP (1:1) e Banners automaticamente',
+          value: 'separate_resolution',
+          emoji: '📐'
+        },
+        {
+          label: 'Extrator de Cores',
+          description: 'Extrai HEX, RGB e cores dominantes',
+          value: 'color_extractor',
+          emoji: '🎨'
+        },
+        {
+          label: 'YouTube para GIF',
+          description: 'Converte vídeos do YouTube diretamente',
+          value: 'youtube_to_gif',
+          emoji: '<:youtube:1386479955936022630>'
+        },
+        {
+          label: 'Download TikTok',
+          description: 'Baixa vídeos do TikTok em HD',
+          value: 'download_tiktok',
+          emoji: '<:tiktok:1386523276171280495>'
+        }
+      ]);
+
+    const row1 = new ActionRowBuilder().addComponents(selectMenu);
 
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('youtube_to_gif')
-        .setLabel('YouTube para GIF')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('<:youtube:1386479955936022630>'),
-      new ButtonBuilder()
-        .setCustomId('download_tiktok')
-        .setLabel('Download TikTok Video')
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji('<:tiktok:1386523276171280495>'),
-      new ButtonBuilder()
         .setCustomId('encerrar_thread')
-        .setLabel('Encerrar')
+        .setLabel('Encerrar Thread')
+        .setEmoji('🔒')
         .setStyle(ButtonStyle.Danger)
     );
 
-    await thread.send({ content: `${user}`, embeds: [embed], components: [row, row2] });
+    await thread.send({ content: `${user}`, embeds: [embed], components: [row1, row2] });
 
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
@@ -1901,11 +2093,238 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
     }
   }
 
+  // Função para processar opções de conversão
+  async function handleConversionOption(interaction, customId) {
+    // Verificar se channel existe
+    if (!interaction.channel) {
+      console.error('Canal não encontrado na interação:', interaction);
+      return interaction.reply({
+        content: '❌ Erro interno: canal não encontrado. Tente novamente.',
+        ephemeral: true
+      });
+    }
+
+    const tipos = {
+      video_to_gif: 'video-to-gif',
+      resize_gif: 'resize-gif',
+      crop_image: 'crop-image',
+      youtube_to_gif: 'youtube-to-gif',
+      stretch_image: 'stretch-image',
+      discord_banner: 'discord-banner',
+      format_convert: 'format-convert',
+      rename_files: 'rename-files',
+      separate_resolution: 'separate-resolution',
+      color_extractor: 'color-extractor'
+    };
+
+    if (tipos[customId]) {
+      // Para YouTube, abrir modal diretamente
+      if (customId === 'youtube_to_gif') {
+        const modal = new ModalBuilder()
+          .setCustomId('youtube_modal')
+          .setTitle('YouTube para GIF');
+
+        const youtubeInput = new TextInputBuilder()
+          .setCustomId('youtube_url')
+          .setLabel('Link do YouTube')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('https://www.youtube.com/watch?v=...')
+          .setRequired(true);
+
+        const startTimeInput = new TextInputBuilder()
+          .setCustomId('start_time')
+          .setLabel('Tempo inicial (opcional)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 10 (para começar aos 10 segundos)')
+          .setRequired(false);
+
+        const durationInput = new TextInputBuilder()
+          .setCustomId('duration')
+          .setLabel('Duração em segundos (máx: 10)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 5 (para GIF de 5 segundos)')
+          .setRequired(false);
+
+        const row1 = new ActionRowBuilder().addComponents(youtubeInput);
+        const row2 = new ActionRowBuilder().addComponents(startTimeInput);
+        const row3 = new ActionRowBuilder().addComponents(durationInput);
+
+        modal.addComponents(row1, row2, row3);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Para redimensionar GIF, abrir modal para porcentagem
+      if (customId === 'resize_gif') {
+        const modal = new ModalBuilder()
+          .setCustomId('resize_gif_modal')
+          .setTitle('🔄 Redimensionar GIF');
+
+        const percentageInput = new TextInputBuilder()
+          .setCustomId('percentage')
+          .setLabel('Porcentagem de otimização (1-100%)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 50 (para reduzir 50% do tamanho)')
+          .setMinLength(1)
+          .setMaxLength(3)
+          .setRequired(true);
+
+        const row1 = new ActionRowBuilder().addComponents(percentageInput);
+        modal.addComponents(row1);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Para esticar imagem, abrir modal para dimensões
+      if (customId === 'stretch_image') {
+        const modal = new ModalBuilder()
+          .setCustomId('stretch_image_modal')
+          .setTitle('📏 Esticar Imagem');
+
+        const widthInput = new TextInputBuilder()
+          .setCustomId('width')
+          .setLabel('Largura (pixels)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 1920')
+          .setRequired(true);
+
+        const heightInput = new TextInputBuilder()
+          .setCustomId('height')
+          .setLabel('Altura (pixels)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 1080')
+          .setRequired(true);
+
+        const modeInput = new TextInputBuilder()
+          .setCustomId('mode')
+          .setLabel('Modo (stretch/fit/fill)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('stretch - estica | fit - proporcional | fill - preenche')
+          .setRequired(false);
+
+        const row1 = new ActionRowBuilder().addComponents(widthInput);
+        const row2 = new ActionRowBuilder().addComponents(heightInput);
+        const row3 = new ActionRowBuilder().addComponents(modeInput);
+        modal.addComponents(row1, row2, row3);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Para converter formato, abrir modal
+      if (customId === 'format_convert') {
+        const modal = new ModalBuilder()
+          .setCustomId('format_convert_modal')
+          .setTitle('🔄 Converter Formato');
+
+        const formatInput = new TextInputBuilder()
+          .setCustomId('target_format')
+          .setLabel('Formato de destino')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('png, jpg, webp, gif, bmp')
+          .setRequired(true);
+
+        const qualityInput = new TextInputBuilder()
+          .setCustomId('quality')
+          .setLabel('Qualidade (1-100, apenas para JPG)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 90 (opcional)')
+          .setRequired(false);
+
+        const row1 = new ActionRowBuilder().addComponents(formatInput);
+        const row2 = new ActionRowBuilder().addComponents(qualityInput);
+        modal.addComponents(row1, row2);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Para renomear arquivos, abrir modal
+      if (customId === 'rename_files') {
+        const modal = new ModalBuilder()
+          .setCustomId('rename_files_modal')
+          .setTitle('📝 Renomear Arquivos');
+
+        const patternInput = new TextInputBuilder()
+          .setCustomId('pattern')
+          .setLabel('Padrão do nome')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: arquivo_{numero} ou imagem_{data}')
+          .setRequired(true);
+
+        const startInput = new TextInputBuilder()
+          .setCustomId('start_number')
+          .setLabel('Número inicial (opcional)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: 1, 001, 100')
+          .setRequired(false);
+
+        const row1 = new ActionRowBuilder().addComponents(patternInput);
+        const row2 = new ActionRowBuilder().addComponents(startInput);
+        modal.addComponents(row1, row2);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Handler para download TikTok
+      if (customId === 'download_tiktok') {
+        const modal = new ModalBuilder()
+          .setCustomId('tiktok_download_modal')
+          .setTitle('Download TikTok Video');
+
+        const tiktokInput = new TextInputBuilder()
+          .setCustomId('tiktok_url')
+          .setLabel('Link do TikTok')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('https://www.tiktok.com/@user/video/...')
+          .setRequired(true);
+
+        const row1 = new ActionRowBuilder().addComponents(tiktokInput);
+        modal.addComponents(row1);
+
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // Para outros tipos, definir escolha e responder
+      conversaoEscolha.set(interaction.channel.id, tipos[customId]);
+
+      const responseMessages = {
+        'video-to-gif': '**Conversão Vídeo → GIF** selecionada!\n> Envie seu arquivo de vídeo (.mp4, .avi, .mov, .wmv, .mkv)',
+        'crop-image': '**Cortar Imagem** selecionado!\n> Envie sua imagem ou GIF para recorte 1:1',
+        'discord-banner': '**Banner Discord** selecionado!\n> Envie sua imagem ou GIF para cortar em 734x293px',
+        'separate-resolution': '**Separar por Resolução** selecionado!\n> Envie múltiplas imagens para separar por tipo (PFP/Banner)',
+        'color-extractor': '**Extrator de Cores** selecionado!\n> Envie uma imagem para extrair HEX, RGB e cores dominantes'
+      };
+
+      const embed = new EmbedBuilder()
+        .setTitle('✅ **OPÇÃO SELECIONADA**')
+        .setDescription(responseMessages[tipos[customId]])
+        .setColor('#8804fc')
+        .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
+
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ embeds: [embed], ephemeral: false });
+        }
+      } catch (error) {
+        console.error('Erro ao responder interação:', error);
+        if (error.code === 10062) {
+          console.log('Interação expirou, mas embed foi enviado');
+        }
+      }
+    }
+  }
+
   const tipos = {
     video_to_gif: 'video-to-gif',
     resize_gif: 'resize-gif',
     crop_image: 'crop-image',
-    youtube_to_gif: 'youtube-to-gif'
+    youtube_to_gif: 'youtube-to-gif',
+    stretch_image: 'stretch-image',
+    discord_banner: 'discord-banner',
+    format_convert: 'format-convert',
+    rename_files: 'rename-files',
+    separate_resolution: 'separate-resolution',
+    color_extractor: 'color-extractor'
   };
 
   if (tipos[customId]) {
@@ -1966,12 +2385,104 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       return;
     }
 
+    // Para esticar imagem, abrir modal para dimensões
+    if (customId === 'stretch_image') {
+      const modal = new ModalBuilder()
+        .setCustomId('stretch_image_modal')
+        .setTitle('📏 Esticar Imagem');
+
+      const widthInput = new TextInputBuilder()
+        .setCustomId('width')
+        .setLabel('Largura (pixels)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: 1920')
+        .setRequired(true);
+
+      const heightInput = new TextInputBuilder()
+        .setCustomId('height')
+        .setLabel('Altura (pixels)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: 1080')
+        .setRequired(true);
+
+      const modeInput = new TextInputBuilder()
+        .setCustomId('mode')
+        .setLabel('Modo (stretch/fit/fill)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('stretch - estica | fit - proporcional | fill - preenche')
+        .setRequired(false);
+
+      const row1 = new ActionRowBuilder().addComponents(widthInput);
+      const row2 = new ActionRowBuilder().addComponents(heightInput);
+      const row3 = new ActionRowBuilder().addComponents(modeInput);
+      modal.addComponents(row1, row2, row3);
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // Para converter formato, abrir modal
+    if (customId === 'format_convert') {
+      const modal = new ModalBuilder()
+        .setCustomId('format_convert_modal')
+        .setTitle('🔄 Converter Formato');
+
+      const formatInput = new TextInputBuilder()
+        .setCustomId('target_format')
+        .setLabel('Formato de destino')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('png, jpg, webp, gif, bmp')
+        .setRequired(true);
+
+      const qualityInput = new TextInputBuilder()
+        .setCustomId('quality')
+        .setLabel('Qualidade (1-100, apenas para JPG)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: 90 (opcional)')
+        .setRequired(false);
+
+      const row1 = new ActionRowBuilder().addComponents(formatInput);
+      const row2 = new ActionRowBuilder().addComponents(qualityInput);
+      modal.addComponents(row1, row2);
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // Para renomear arquivos, abrir modal
+    if (customId === 'rename_files') {
+      const modal = new ModalBuilder()
+        .setCustomId('rename_files_modal')
+        .setTitle('📝 Renomear Arquivos');
+
+      const patternInput = new TextInputBuilder()
+        .setCustomId('pattern')
+        .setLabel('Padrão do nome')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: arquivo_{numero} ou imagem_{data}')
+        .setRequired(true);
+
+      const startInput = new TextInputBuilder()
+        .setCustomId('start_number')
+        .setLabel('Número inicial (opcional)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: 1, 001, 100')
+        .setRequired(false);
+
+      const row1 = new ActionRowBuilder().addComponents(patternInput);
+      const row2 = new ActionRowBuilder().addComponents(startInput);
+      modal.addComponents(row1, row2);
+      await interaction.showModal(modal);
+      return;
+    }
+
     // Para outros tipos, definir escolha e responder
     conversaoEscolha.set(interaction.channel.id, tipos[customId]);
 
     const responseMessages = {
       'video-to-gif': '**Conversão Vídeo → GIF** selecionada!\n> Envie seu arquivo de vídeo (.mp4, .avi, .mov, .wmv, .mkv)',
-      'crop-image': '**Cortar Imagem** selecionado!\n> Envie sua imagem ou GIF para recorte 1:1'
+      'crop-image': '**Cortar Imagem** selecionado!\n> Envie sua imagem ou GIF para recorte 1:1',
+      'discord-banner': '**Banner Discord** selecionado!\n> Envie sua imagem ou GIF para cortar em 734x293px',
+      'separate-resolution': '**Separar por Resolução** selecionado!\n> Envie múltiplas imagens para separar por tipo (PFP/Banner)',
+      'color-extractor': '**Extrator de Cores** selecionado!\n> Envie uma imagem para extrair HEX, RGB e cores dominantes'
     };
 
     const embed = new EmbedBuilder()
@@ -3498,7 +4009,7 @@ client.on('messageCreate', async message => {
 
   // Lidar com objeto ou string
   const tipo = typeof tipoData === 'object' ? tipoData.type : tipoData;
-  const percentage = typeof tipoData === 'object' ? tipoData.percentage : null;
+  const extraData = typeof tipoData === 'object' ? tipoData : null;
 
   // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
@@ -3567,7 +4078,8 @@ client.on('messageCreate', async message => {
       return;
     }
 
-    const { buffer, name, temporarios } = await processFile(file, tipo, percentage);
+    const result = await processFile(file, tipo, extraData);
+    const { buffer, name, temporarios } = result;
 
     // Verificar tamanho do arquivo final antes de enviar
     const fileSizeBytes = buffer.length;
@@ -3674,13 +4186,26 @@ client.on('messageCreate', async message => {
     // Aguardar um momento para garantir que a limpeza foi processada pelo Discord
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Então enviar o resultado final completamente limpo
-    await aguardandoMsg.edit({ 
-      content: `${message.author} **Sua conversão está pronta!**`, 
-      embeds: [resultEmbed], 
-      files: [attachment],
-      components: []
-    });
+    // Verificar se é extrator de cores para adicionar informações extras
+    if (tipo === 'color-extractor' && result.colorData) {
+      // Criar arquivo de texto com as cores
+      const colorFile = new AttachmentBuilder(Buffer.from(result.colorData, 'utf8'), { name: 'cores_detalhadas.txt' });
+
+      await aguardandoMsg.edit({ 
+        content: `${message.author} **Sua conversão está pronta!**\n\n📋 **Informações das cores:**\n\`\`\`${result.colorData}\`\`\``, 
+        embeds: [resultEmbed], 
+        files: [attachment, colorFile],
+        components: []
+      });
+    } else {
+      // Envio normal para outras conversões
+      await aguardandoMsg.edit({ 
+        content: `${message.author} **Sua conversão está pronta!**`, 
+        embeds: [resultEmbed], 
+        files: [attachment],
+        components: []
+      });
+    }
 
     // Apaga arquivos temporários após envio
     temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
@@ -3711,7 +4236,7 @@ client.on('messageCreate', async message => {
 });
 
 // Função principal de conversão
-async function processFile(attachment, type, percentage = null) {
+async function processFile(attachment, type, extraData = null) {
   const url = attachment.url;
   const nomeBase = Date.now();
   const temporarios = [];
@@ -3762,7 +4287,7 @@ async function processFile(attachment, type, percentage = null) {
       temporarios.push(input, output);
 
       // Calcular escala baseada na porcentagem (se não fornecida, usar 70% como padrão)
-      const optimizationPercentage = percentage || 70;
+      const optimizationPercentage = (extraData && extraData.percentage) || 70;
       const scale = (100 - optimizationPercentage) / 100; // Converte porcentagem de redução para escala
       const lossyValue = Math.min(optimizationPercentage * 2, 200); // Ajustar lossy baseado na porcentagem
       const colorsValue = Math.max(256 - (optimizationPercentage * 2), 32); // Reduzir cores baseado na porcentagem
@@ -3783,6 +4308,368 @@ async function processFile(attachment, type, percentage = null) {
 
       const resized = fs.readFileSync(output);
       return { buffer: resized, name: `convertido.gif`, temporarios };
+    }
+
+    case 'stretch-image': {
+      const response = await fetch(url);
+      const buffer = await response.buffer();
+
+      // Verificar se extraData contém os dados de stretch-image
+      const stretchData = extraData || {};
+      const { width, height, mode } = stretchData;
+
+      if (!width || !height) {
+        throw new Error('Dimensões não fornecidas para esticar imagem');
+      }
+
+      let resizeOptions = { width, height };
+
+      switch(mode) {
+        case 'fit':
+          resizeOptions.fit = 'inside';
+          resizeOptions.withoutEnlargement = true;
+          break;
+        case 'fill':
+          resizeOptions.fit = 'cover';
+          break;
+        default: // stretch
+          resizeOptions.fit = 'fill';
+      }
+
+      const extension = attachment.name.split('.').pop().toLowerCase();
+      const stretchedImage = await sharp(buffer)
+        .resize(resizeOptions)
+        .toBuffer();
+
+      return { 
+        buffer: stretchedImage, 
+        name: `esticado_${width}x${height}.${extension}`, 
+        temporarios: [] 
+      };
+    }
+
+    case 'discord-banner': {
+      const response = await fetch(url);
+      const buffer = await response.buffer();
+
+      const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
+
+      if (isGif) {
+        const inputPath = `banner_${nomeBase}.gif`;
+        const outputPath = `banner_out_${nomeBase}.gif`;
+        fs.writeFileSync(inputPath, buffer);
+        temporarios.push(inputPath, outputPath);
+
+        // Obter dimensões do GIF
+        const metadata = await sharp(buffer, { animated: false }).metadata();
+        const { width, height } = metadata;
+
+        // Calcular crop para 734x293 (proporção do banner do Discord)
+        const targetWidth = 734;
+        const targetHeight = 293;
+        const targetRatio = targetWidth / targetHeight;
+        const currentRatio = width / height;
+
+        let cropWidth, cropHeight, left, top;
+
+        if (currentRatio > targetRatio) {
+          // Imagem mais larga, cortar largura
+          cropHeight = height;
+          cropWidth = Math.round(height * targetRatio);
+          left = Math.round((width - cropWidth) / 2);
+          top = 0;
+        } else {
+          // Imagem mais alta, cortar altura
+          cropWidth = width;
+          cropHeight = Math.round(width / targetRatio);
+          left = 0;
+          top = Math.round((height - cropHeight) / 2);
+        }
+
+        if (!gifsicle) {
+          throw new Error('Gifsicle não está disponível. Tente novamente em alguns segundos.');
+        }
+
+        await new Promise((resolve, reject) => {
+          execFile(gifsicle, [
+            '--crop', `${left},${top}+${cropWidth}x${cropHeight}`,
+            '--resize', `${targetWidth}x${targetHeight}`,
+            inputPath, 
+            '-o', outputPath
+          ], err => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+
+        const bannerGif = fs.readFileSync(outputPath);
+        return { buffer: bannerGif, name: `banner_discord.gif`, temporarios };
+      } else {
+        const metadata = await sharp(buffer).metadata();
+        const { width, height } = metadata;
+
+        // Calcular crop para banner do Discord
+        const targetWidth = 734;
+        const targetHeight = 293;
+        const targetRatio = targetWidth / targetHeight;
+        const currentRatio = width / height;
+
+        let cropWidth, cropHeight, left, top;
+
+        if (currentRatio > targetRatio) {
+          cropHeight = height;
+          cropWidth = Math.round(height * targetRatio);
+          left = Math.round((width - cropWidth) / 2);
+          top = 0;
+        } else {
+          cropWidth = width;
+          cropHeight = Math.round(width / targetRatio);
+          left = 0;
+          top = Math.round((height - cropHeight) / 2);
+        }
+
+        const extension = attachment.name.split('.').pop().toLowerCase();
+        const bannerImage = await sharp(buffer)
+          .extract({ left, top, width: cropWidth, height: cropHeight })
+          .resize(targetWidth, targetHeight)
+          .toBuffer();
+
+        return { 
+          buffer: bannerImage, 
+          name: `banner_discord.${extension}`, 
+          temporarios: [] 
+        };
+      }
+    }
+
+    case 'format-convert': {
+      const response = await fetch(url);
+      const buffer = await response.buffer();
+
+      // Verificar se extraData contém os dados de format-convert
+      const formatData = extraData || {};
+      const { format, quality } = formatData;
+
+      let sharpProcessor = sharp(buffer);
+
+      switch(format) {
+        case 'jpg':
+        case 'jpeg':
+          sharpProcessor = sharpProcessor.jpeg({ quality });
+          break;
+        case 'png':
+          sharpProcessor = sharpProcessor.png({ quality: Math.round(quality / 10) });
+          break;
+        case 'webp':
+          sharpProcessor = sharpProcessor.webp({ quality });
+          break;
+        case 'gif':
+          // Para GIF, usar gifsicle se disponível
+          if (gifsicle) {
+            const input = `convert_${nomeBase}.gif`;
+            const output = `converted_${nomeBase}.gif`;
+            fs.writeFileSync(input, buffer);
+            temporarios.push(input, output);
+
+            await new Promise((resolve, reject) => {
+              execFile(gifsicle, [
+                '--optimize=3',
+                input, 
+                '-o', output
+              ], err => {
+                if (err) return reject(err);
+                resolve();
+              });
+            });
+
+            const convertedGif = fs.readFileSync(output);
+            return { buffer: convertedGif, name: `convertido.gif`, temporarios };
+          }
+          // Fallback para sharp
+          sharpProcessor = sharpProcessor.gif();
+          break;
+        case 'bmp':
+          // Sharp não suporta BMP nativamente, converter para PNG
+          sharpProcessor = sharpProcessor.png();
+          break;
+        case 'tiff':
+          sharpProcessor = sharpProcessor.tiff();
+          break;
+        default:
+          sharpProcessor = sharpProcessor.png();
+      }
+
+      const convertedBuffer = await sharpProcessor.toBuffer();
+
+      return { 
+        buffer: convertedBuffer, 
+        name: `convertido.${format}`, 
+        temporarios: [] 
+      };
+    }
+
+    case 'separate-resolution': {
+      // Esta função precisa de múltiplos arquivos, retornar instruções
+      throw new Error('Para separar por resolução, envie múltiplas imagens. O sistema analisará automaticamente e separará PFP (1:1) de Banners.');
+    }
+
+    case 'color-extractor': {
+      const response = await fetch(url);
+      const buffer = await response.buffer();
+
+      // Usar sharp para obter estatísticas da imagem
+      const { dominant } = await sharp(buffer).stats();
+      const metadata = await sharp(buffer).metadata();
+
+      // Redimensionar a imagem para análise mais rápida (máximo 200x200)
+      const resizedBuffer = await sharp(buffer)
+        .resize(200, 200, { fit: 'inside' })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      // Extrair múltiplas cores da imagem
+      const imageData = resizedBuffer.data;
+      const { width, height } = resizedBuffer.info;
+      const pixelCount = width * height;
+      const colorCounts = new Map();
+
+      // Analisar pixels em intervalos para obter cores variadas
+      const sampleRate = Math.max(1, Math.floor(pixelCount / 1000)); // Máximo 1000 amostras
+
+      for (let i = 0; i < pixelCount; i += sampleRate) {
+        const pixelIndex = i * 3; // 3 bytes por pixel (RGB)
+        if (pixelIndex + 2 < imageData.length) {
+          const r = imageData[pixelIndex];
+          const g = imageData[pixelIndex + 1];
+          const b = imageData[pixelIndex + 2];
+
+          // Agrupar cores similares (arredondar para reduzir variações)
+          const roundedR = Math.round(r / 10) * 10;
+          const roundedG = Math.round(g / 10) * 10;
+          const roundedB = Math.round(b / 10) * 10;
+
+          const colorKey = `${roundedR},${roundedG},${roundedB}`;
+          colorCounts.set(colorKey, (colorCounts.get(colorKey) || 0) + 1);
+        }
+      }
+
+      // Obter as 5 cores mais comuns
+      const sortedColors = Array.from(colorCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([colorKey]) => {
+          const [r, g, b] = colorKey.split(',').map(Number);
+          return { r, g, b };
+        });
+
+      // Adicionar a cor dominante do sharp no início
+      const colors = [
+        { r: dominant.r, g: dominant.g, b: dominant.b },
+        ...sortedColors.slice(0, 4) // Adicionar 4 cores mais comuns
+      ];
+
+      // Converter RGB para HEX e HSL
+      const colorInfo = colors.map(color => {
+        const hex = `#${((1 << 24) + (color.r << 16) + (color.g << 8) + color.b).toString(16).slice(1)}`;
+
+        // Converter para HSL
+        const r = color.r / 255;
+        const g = color.g / 255;
+        const b = color.b / 255;
+
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        let h, s, l = (max + min) / 2;
+
+        if (max === min) {
+          h = s = 0;
+        } else {
+          const d = max - min;
+          s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+          switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+          }
+          h /= 6;
+        }
+
+        return {
+          hex,
+          rgb: `rgb(${color.r}, ${color.g}, ${color.b})`,
+          hsl: `hsl(${Math.round(h * 360)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%)`
+        };
+      });
+
+      // Criar uma paleta visual com as cores extraídas
+      const paletteWidth = 500;
+      const paletteHeight = 100;
+      const colorWidth = paletteWidth / colors.length;
+
+      // Criar SVG da paleta
+      let svgContent = `<svg width="${paletteWidth}" height="${paletteHeight}" xmlns="http://www.w3.org/2000/svg">`;
+
+      colors.forEach((color, index) => {
+        const x = index * colorWidth;
+        const hex = colorInfo[index].hex;
+        svgContent += `<rect x="${x}" y="0" width="${colorWidth}" height="${paletteHeight}" fill="${hex}"/>`;
+
+        // Adicionar texto com o valor HEX
+        const textColor = (color.r + color.g + color.b) > 384 ? '#000000' : '#ffffff';
+        svgContent += `<text x="${x + colorWidth/2}" y="${paletteHeight/2 + 5}" text-anchor="middle" fill="${textColor}" font-family="Arial" font-size="12">${hex}</text>`;
+      });
+
+      svgContent += '</svg>';
+
+      // Converter SVG para PNG
+      const paletteBuffer = await sharp(Buffer.from(svgContent))
+        .png()
+        .toBuffer();
+
+      // Criar arquivo de texto com as informações das cores
+      let colorData = `CORES EXTRAÍDAS DA IMAGEM:\n\n`;
+
+      colorInfo.forEach((color, index) => {
+        colorData += `Cor ${index + 1}${index === 0 ? ' (Dominante)' : ''}:\n`;
+        colorData += `HEX: ${color.hex}\n`;
+        colorData += `RGB: ${color.rgb}\n`;
+        colorData += `HSL: ${color.hsl}\n\n`;
+      });
+
+      colorData += `Informações da Imagem:\n`;
+      colorData += `Dimensões: ${metadata.width}x${metadata.height}\n`;
+      colorData += `Formato: ${metadata.format}\n`;
+      colorData += `Espaço de cor: ${metadata.space}\n`;
+      colorData += `Canais: ${metadata.channels}\n`;
+
+      // Retornar a paleta de cores como imagem
+      return { 
+        buffer: paletteBuffer, 
+        name: `paleta_cores.png`, 
+        temporarios: [],
+        colorData: colorData
+      };
+    }
+
+    case 'rename-files': {
+      // Esta função precisa de múltiplos arquivos
+      const renameData = extraData || {};
+      const { pattern, startNumber } = renameData;
+
+      // Para demonstração, renomear o arquivo atual
+      const extension = attachment.name.split('.').pop();
+      const newName = pattern
+        .replace('{numero}', startNumber.toString().padStart(3, '0'))
+        .replace('{data}', new Date().toISOString().slice(0, 10));
+
+      const response = await fetch(url);
+      const buffer = await response.buffer();
+
+      return { 
+        buffer: buffer, 
+        name: `${newName}.${extension}`, 
+        temporarios: [] 
+      };
     }
 
     case 'crop-image': {
