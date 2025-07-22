@@ -4921,7 +4921,7 @@ Thread será arquivada em alguns segundos...
   // Handlers para painéis específicos
   if (customId === 'painel_instagram') {
     const staffRoleId = '1230677503719374990';
-    const adminRoles = ['1065441743379628043', '1065441744726020126'];
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
     const hasStaffRole = interaction.member.roles.cache.has(staffRoleId);
     const hasAdminRole = interaction.member.roles.cache.some(role => adminRoles.includes(role.id));
 
@@ -5002,7 +5002,7 @@ Sistema de verificação de usuários
 
   if (customId === 'painel_recrutamento') {
     const staffRoleId = '1230677503719374990';
-    const adminRoles = ['1065441743379628043', '1065441744726020126'];
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
     const hasStaffRole = interaction.member.roles.cache.has(staffRoleId);
     const hasAdminRole = interaction.member.roles.cache.some(role => adminRoles.includes(role.id));
 
@@ -5057,7 +5057,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
 
   if (customId === 'painel_desempenho') {
     const staffRoleId = '1230677503719374990';
-    const adminRoles = ['1065441743379628043', '1065441744726020126'];
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
     const hasStaffRole = interaction.member.roles.cache.has(staffRoleId);
     const hasAdminRole = interaction.member.roles.cache.some(role => adminRoles.includes(role.id));
 
@@ -5178,7 +5178,7 @@ ${statsText}
   }
 
   if (customId === 'painel_administracao') {
-    const adminRoles = ['1065441743379628043', '1065441744726020126'];
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
     const hasAdminRole = interaction.member.roles.cache.some(role => adminRoles.includes(role.id));
 
     if (!hasAdminRole) {
