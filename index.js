@@ -292,7 +292,7 @@ async function getStaffIndividualStats(staffId) {
       WHERE staff_id = $1
       GROUP BY staff_id
     `, [staffId]);
-    
+
     return result.rows[0] || null;
   } catch (error) {
     console.error('Erro ao buscar estatísticas individuais:', error);
@@ -558,7 +558,123 @@ const postAuthors = new Map();
 const postPrivacySettings = new Map();
 const userCommentCount = new Map();
 
+// Sistema de inatividade para threads do conversor
+const threadInactivityTimers = new Map(); // threadId -> { firstTimer, secondTimer }
+const threadWarningMessages = new Map(); // threadId -> messageId
+
 console.log('Sistema de posts PostgreSQL inicializado');
+
+// Funções para sistema de inatividade nas threads do conversor
+function startInactivityTimer(threadId, userId) {
+  // Limpar timers existentes se houver
+  clearInactivityTimer(threadId);
+
+  const firstTimeout = setTimeout(async () => {
+    try {
+      const thread = client.channels.cache.get(threadId);
+      if (!thread || thread.archived || thread.locked) return;
+
+      const warningEmbed = new EmbedBuilder()
+        .setTitle(' **THREAD INATIVA**')
+        .setDescription(`
+**Ei, ainda está aí?**
+
+Sua thread de conversão está inativa há 5 minutos.
+
+>  *Se você não responder em 3 minutos, a thread será encerrada automaticamente para otimizar o servidor.*
+`)
+        .setColor('#ffaa00')
+        .setTimestamp();
+
+      const encerrarButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('encerrar_thread_inativo')
+          .setLabel('Encerrar Thread')
+          .setEmoji('🔒')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const warningMessage = await thread.send({
+        content: `<@${userId}>`,
+        embeds: [warningEmbed],
+        components: [encerrarButton]
+      });
+
+      // Salvar ID da mensagem de aviso
+      threadWarningMessages.set(threadId, warningMessage.id);
+
+      // Iniciar segundo timer (3 minutos para encerramento automático)
+      const secondTimeout = setTimeout(async () => {
+        try {
+          const threadCheck = client.channels.cache.get(threadId);
+          if (!threadCheck || threadCheck.archived || threadCheck.locked) return;
+
+          const autoCloseEmbed = new EmbedBuilder()
+            .setTitle(' **THREAD ENCERRADA AUTOMATICAMENTE**')
+            .setDescription(`
+**Thread encerrada por inatividade**
+
+Esta thread foi automaticamente encerrada após 8 minutos de inatividade total.
+
+**Motivo:** Otimização do servidor
+**Encerrado em:** ${new Date().toLocaleString('pt-BR')}
+
+>  *Você pode abrir uma nova thread de conversão a qualquer momento.*
+`)
+            .setColor('#ff4444')
+            .setFooter({ text: 'GIFZADA CONVERSOR • Encerramento Automático' })
+            .setTimestamp();
+
+          await threadCheck.send({ embeds: [autoCloseEmbed] });
+
+          // Aguardar 2 segundos antes de trancar e arquivar
+          setTimeout(async () => {
+            try {
+              await threadCheck.setLocked(true);
+              await threadCheck.setArchived(true);
+              
+              // Limpar dados da thread
+              clearInactivityTimer(threadId);
+              conversaoEscolha.delete(threadId);
+            } catch (lockError) {
+              console.error('Erro ao trancar thread por inatividade:', lockError);
+            }
+          }, 2000);
+
+        } catch (error) {
+          console.error('Erro no encerramento automático por inatividade:', error);
+        }
+      }, 3 * 60 * 1000); // 3 minutos
+
+      // Salvar o segundo timer
+      const timers = threadInactivityTimers.get(threadId) || {};
+      timers.secondTimer = secondTimeout;
+      threadInactivityTimers.set(threadId, timers);
+
+    } catch (error) {
+      console.error('Erro no aviso de inatividade:', error);
+    }
+  }, 5 * 60 * 1000); // 5 minutos
+
+  // Salvar o primeiro timer
+  threadInactivityTimers.set(threadId, { firstTimer: firstTimeout });
+}
+
+function clearInactivityTimer(threadId) {
+  const timers = threadInactivityTimers.get(threadId);
+  if (timers) {
+    if (timers.firstTimer) clearTimeout(timers.firstTimer);
+    if (timers.secondTimer) clearTimeout(timers.secondTimer);
+    threadInactivityTimers.delete(threadId);
+  }
+  threadWarningMessages.delete(threadId);
+}
+
+function resetInactivityTimer(threadId, userId) {
+  // Limpar timers existentes e iniciar novo timer
+  clearInactivityTimer(threadId);
+  startInactivityTimer(threadId, userId);
+}
 
 // Maps para sistema de verificação
 const activeVerificationThreads = new Map(); // userId -> threadId
@@ -997,7 +1113,7 @@ ${objetivo}
 
     // Arquivar thread
     await targetChannel.setArchived(true);
-    
+
     // Remover thread ativa do banco
     if (assignment.userId) {
       await removeActiveThread(assignment.userId);
@@ -2379,7 +2495,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       try {
         const member = await interaction.guild.members.fetch(userId);
-        
+
         // Hierarquia de cargos (do mais baixo ao mais alto)
         const hierarchy = [
           '1065441761171869796', // Iniciante (mais baixo)
@@ -2425,7 +2541,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         // Remover cargo atual e adicionar próximo
         const currentRole = hierarchy[currentRoleIndex];
         const nextRole = hierarchy[currentRoleIndex + 1];
-        
+
         await member.roles.remove(currentRole);
         await member.roles.add(nextRole);
 
@@ -2447,7 +2563,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       try {
         const member = await interaction.guild.members.fetch(userId);
-        
+
         // Hierarquia de cargos (do mais baixo ao mais alto)
         const hierarchy = [
           '1065441761171869796', // Iniciante (mais baixo)
@@ -2502,7 +2618,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         // Remover cargo atual e adicionar anterior
         const currentRole = hierarchy[currentRoleIndex];
         const previousRole = hierarchy[currentRoleIndex - 1];
-        
+
         await member.roles.remove(currentRole);
         await member.roles.add(previousRole);
 
@@ -2524,7 +2640,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       try {
         const member = await interaction.guild.members.fetch(userId);
-        
+
         // Todos os cargos que devem ser removidos
         const rolesToRemove = [
           '1072027317297229875', // Postador
@@ -2570,7 +2686,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       try {
         const staffStats = await getStaffIndividualStats(staffId);
-        
+
         if (!staffStats) {
           return interaction.reply({
             content: '❌ Nenhuma estatística encontrada para este staff. Verifique se o ID está correto ou se o staff já recebeu feedbacks.',
@@ -3174,6 +3290,9 @@ ${detailText}
 
     await thread.send({ content: `${user}`, embeds: [embed], components: [row1, row2] });
 
+    // Iniciar timer de inatividade para a thread
+    startInactivityTimer(thread.id, user.id);
+
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
       try {
@@ -3197,6 +3316,11 @@ ${detailText}
         content: '❌ Erro interno: canal não encontrado. Tente novamente.',
         ephemeral: true
       });
+    }
+
+    // Resetar timer de inatividade se for uma thread de conversor
+    if (interaction.channel.isThread() && conversaoEscolha.has(interaction.channel.id)) {
+      resetInactivityTimer(interaction.channel.id, interaction.user.id);
     }
 
     const tipos = {
@@ -3359,7 +3483,7 @@ ${detailText}
         return;
       }
 
-      
+
 
       // Para outros tipos, definir escolha e responder
       conversaoEscolha.set(interaction.channel.id, tipos[customId]);
@@ -3580,7 +3704,7 @@ ${detailText}
     }
   }
 
-  
+
 
   // Handlers para botões de suporte
   if (customId === 'receba_ajuda') {
@@ -3784,7 +3908,7 @@ ${detailText}
     const userIdMatch = threadName.match(/(\d+)/);
     if (userIdMatch) {
       const userId = userIdMatch[1];
-      
+
       // Registrar assignment do ticket
       threadAssignments.set(interaction.channel.id, {
         staffId: interaction.user.id,
@@ -3970,7 +4094,7 @@ Thread será arquivada em alguns segundos...
     setTimeout(async () => {
       try {
         await interaction.channel.setArchived(true);
-        
+
         // Remover thread ativa do banco quando arquivada
         const threadName = interaction.channel.name;
         const userIdMatch = threadName.match(/(\d+)/);
@@ -4125,6 +4249,10 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
   // Handler para encerrar thread
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
+      // Limpar timer de inatividade
+      clearInactivityTimer(interaction.channel.id);
+      conversaoEscolha.delete(interaction.channel.id);
+
       await interaction.reply({ 
         content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
       });
@@ -4138,6 +4266,46 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
           await interaction.channel.setArchived(true);
         } catch (error) {
           console.error('Erro ao trancar/arquivar thread:', error);
+        }
+      }, 2000);
+    } else {
+      await interaction.reply({ 
+        content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  // Handler para encerrar thread por inatividade
+  if (customId === 'encerrar_thread_inativo') {
+    if (interaction.channel.isThread()) {
+      // Limpar timer de inatividade
+      clearInactivityTimer(interaction.channel.id);
+      conversaoEscolha.delete(interaction.channel.id);
+
+      const encerrarEmbed = new EmbedBuilder()
+        .setTitle('🔒 **THREAD ENCERRADA**')
+        .setDescription(`
+Thread de conversão encerrada por ${interaction.user}.
+
+**Status:** Finalizada pelo usuário
+**Encerrado em:** ${new Date().toLocaleString('pt-BR')}
+
+Thread será arquivada em alguns segundos...
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: 'GIFZADA CONVERSOR • Thread Finalizada' })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [encerrarEmbed] });
+
+      // Aguardar 2 segundos antes de trancar e arquivar
+      setTimeout(async () => {
+        try {
+          await interaction.channel.setLocked(true);
+          await interaction.channel.setArchived(true);
+        } catch (error) {
+          console.error('Erro ao trancar/arquivar thread por inatividade:', error);
         }
       }, 2000);
     } else {
@@ -4815,7 +4983,7 @@ Thread será arquivada em alguns segundos...
         const discordUser = await client.users.fetch(user.user_id);
         const addedBy = await client.users.fetch(user.added_by);
         const date = new Date(user.added_at).toLocaleDateString('pt-BR');
-        
+
         blacklistText += `**${discordUser.username}** (${user.user_id})\n`;
         blacklistText += `📝 **Motivo:** ${user.reason}\n`;
         blacklistText += `👤 **Adicionado por:** ${addedBy.username}\n`;
@@ -5070,14 +5238,14 @@ Sistema para gerenciar usuários bloqueados no recrutamento
 
     try {
       const performanceStats = await getStaffPerformanceStats();
-      
+
       let statsText = '';
-      
+
       if (performanceStats.length === 0) {
         statsText = 'Nenhum feedback registrado ainda.';
       } else {
         const staffStats = new Map();
-        
+
         // Agrupar por staff
         performanceStats.forEach(stat => {
           if (!staffStats.has(stat.staff_id)) {
@@ -5092,7 +5260,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
               thread_types: []
             });
           }
-          
+
           const staffData = staffStats.get(stat.staff_id);
           staffData.total_feedbacks += parseInt(stat.total_feedbacks);
           staffData.excelente += parseInt(stat.excelente_count);
@@ -5101,7 +5269,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
           staffData.ruim += parseInt(stat.ruim_count);
           staffData.automatic += parseInt(stat.automatic_count);
           staffData.thread_types.push(stat.thread_type);
-          
+
           // Calcular média ponderada
           staffData.avg_rating = (
             (staffData.excelente * 5) + 
@@ -5121,7 +5289,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
             const staffUser = await client.users.fetch(staffId);
             const rating = stats.avg_rating.toFixed(1);
             const stars = '⭐'.repeat(Math.round(stats.avg_rating));
-            
+
             statsText += `**${staffUser.username}** ${stars} (${rating}/5.0)\n`;
             statsText += `📊 **Total:** ${stats.total_feedbacks} | **✅** ${stats.excelente} **👍** ${stats.bom} **👌** ${stats.regular} **👎** ${stats.ruim}\n`;
             statsText += `🤖 **Automático:** ${stats.automatic} | **Áreas:** ${stats.thread_types.join(', ')}\n\n`;
@@ -5503,12 +5671,12 @@ Selecione uma área para acessar suas funções específicas:
   // Handler para privar comentários
   if (customId.startsWith('private_comments_')) {
     const postId = customId.replace('private_comments_', '');
-    
+
     try {
       const settings = await getPostPrivacy(postId);
       const newPrivacy = !settings.comments_private;
       await updatePostPrivacy(postId, newPrivacy, null);
-      
+
       const status = newPrivacy ? 'privados' : 'públicos';
       await interaction.reply({ content: `✅ Comentários agora estão ${status}.`, ephemeral: true });
     } catch (error) {
@@ -5520,12 +5688,12 @@ Selecione uma área para acessar suas funções específicas:
   // Handler para privar curtidas
   if (customId.startsWith('private_likes_')) {
     const postId = customId.replace('private_likes_', '');
-    
+
     try {
       const settings = await getPostPrivacy(postId);
       const newPrivacy = !settings.likes_private;
       await updatePostPrivacy(postId, null, newPrivacy);
-      
+
       const status = newPrivacy ? 'privadas' : 'públicas';
       await interaction.reply({ content: `✅ Curtidas agora estão ${status}.`, ephemeral: true });
     } catch (error) {
@@ -5801,6 +5969,12 @@ client.on('messageCreate', async message => {
   if (message.author.bot || !message.channel.isThread()) return;
 
   const tipoData = conversaoEscolha.get(message.channel.id);
+  
+  // Se for uma thread de conversor, resetar timer de inatividade
+  if (tipoData) {
+    resetInactivityTimer(message.channel.id, message.author.id);
+  }
+  
   const file = message.attachments.first();
   if (!tipoData || !file) return;
 
@@ -5811,7 +5985,7 @@ client.on('messageCreate', async message => {
   // Validar formato do arquivo antes do processamento
   const fileName = file.name.toLowerCase();
   const fileExtension = fileName.match(/\.[^.]*$/)?.[0];
-  
+
   // Definir formatos aceitos para cada tipo de conversão
   const formatosAceitos = {
     'video-to-gif': ['.mp4', '.avi', '.mov', '.wmv', '.mkv', '.webm', '.flv'],
@@ -5827,7 +6001,7 @@ client.on('messageCreate', async message => {
   };
 
   const formatosPermitidos = formatosAceitos[tipo] || [];
-  
+
   // Verificar se o formato é válido para o tipo de conversão selecionado
   if (formatosPermitidos.length > 0 && (!fileExtension || !formatosPermitidos.includes(fileExtension))) {
     const formatosTexto = formatosPermitidos.join(', ');
