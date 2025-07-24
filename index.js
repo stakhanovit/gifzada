@@ -1,4 +1,5 @@
 
+
 const {
   Client,
   GatewayIntentBits,
@@ -1509,6 +1510,208 @@ client.on('messageCreate', async message => {
     );
 
     await message.channel.send({ embeds: [embed], components: [row1] });
+  }
+
+  // Comando !fecharconversor
+  if (message.content.startsWith('!fecharconversor ')) {
+    const staffRoleId = '1230677503719374990';
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
+    const hasAdminRole = message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasStaffRole && !hasAdminRole) {
+      return message.reply({
+        content: '❌ Apenas staffs ou administradores podem usar este comando.',
+        ephemeral: true
+      });
+    }
+
+    const channelId = message.content.split(' ')[1];
+    
+    if (!channelId) {
+      return message.reply({
+        content: '❌ Por favor, forneça o ID do canal.\n**Uso:** `!fecharconversor [ID_DO_CANAL]`',
+        ephemeral: true
+      });
+    }
+
+    const targetChannel = client.channels.cache.get(channelId);
+    
+    if (!targetChannel) {
+      return message.reply({
+        content: '❌ Canal não encontrado. Verifique se o ID está correto.',
+        ephemeral: true
+      });
+    }
+
+    // Embed de carregamento
+    const loadingEmbed = new EmbedBuilder()
+      .setTitle('🔄 **ANALISANDO THREADS DO CONVERSOR**')
+      .setDescription(`
+**Canal:** ${targetChannel}
+**Status:** Carregando threads...
+
+> ⏳ *Aguarde enquanto analisamos todas as threads do canal...*
+`)
+      .setColor('#ffaa00')
+      .setTimestamp();
+
+    const loadingMessage = await message.reply({ embeds: [loadingEmbed] });
+
+    try {
+      // Buscar todas as threads do canal
+      const threads = await targetChannel.threads.fetchActive();
+      const archivedThreads = await targetChannel.threads.fetchArchived();
+      
+      // Combinar threads ativas e arquivadas
+      const allThreads = new Map([...threads.threads, ...archivedThreads.threads]);
+      
+      const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000); // 1 dia em milliseconds
+      let threadsAbertas = 0;
+      let threadsFechadas = 0;
+      let threadsProcessadas = 0;
+      const threadsDetails = [];
+
+      for (const [threadId, thread] of allThreads) {
+        threadsProcessadas++;
+        
+        // Verificar se a thread é de conversão (tem nome relacionado a conversão)
+        const isConversionThread = thread.name.includes('Conversão') || 
+                                   thread.name.includes('🎞️') || 
+                                   conversaoEscolha.has(threadId);
+
+        if (isConversionThread) {
+          const threadAge = Date.now() - thread.createdTimestamp;
+          const isOld = threadAge > (24 * 60 * 60 * 1000); // Mais de 1 dia
+
+          if (isOld && !thread.archived && !thread.locked) {
+            try {
+              // Enviar mensagem de fechamento pela administração
+              await thread.send('🔒 **Fechado pela administração do servidor**');
+
+              // Aguardar 2 segundos antes de fechar e trancar
+              await new Promise(resolve => setTimeout(resolve, 2000));
+
+              // Fechar e arquivar a thread
+              await thread.setLocked(true);
+              await thread.setArchived(true);
+
+              // Limpar dados da thread
+              clearInactivityTimer(threadId);
+              conversaoEscolha.delete(threadId);
+
+              threadsFechadas++;
+              threadsDetails.push({
+                name: thread.name,
+                id: threadId,
+                age: Math.floor(threadAge / (24 * 60 * 60 * 1000)),
+                status: 'Fechada'
+              });
+            } catch (error) {
+              console.error(`Erro ao fechar thread ${threadId}:`, error);
+              threadsDetails.push({
+                name: thread.name,
+                id: threadId,
+                age: Math.floor(threadAge / (24 * 60 * 60 * 1000)),
+                status: 'Erro ao fechar'
+              });
+            }
+          } else if (!thread.archived) {
+            threadsAbertas++;
+            threadsDetails.push({
+              name: thread.name,
+              id: threadId,
+              age: Math.floor(threadAge / (24 * 60 * 60 * 1000)),
+              status: thread.archived ? 'Arquivada' : 'Aberta'
+            });
+          }
+        }
+      }
+
+      // Criar relatório detalhado
+      let detailsText = '';
+      if (threadsDetails.length > 0) {
+        const sortedDetails = threadsDetails.sort((a, b) => b.age - a.age);
+        detailsText = sortedDetails.slice(0, 10).map(thread => 
+          `**${thread.name}** (${thread.age}d) - *${thread.status}*`
+        ).join('\n');
+        
+        if (sortedDetails.length > 10) {
+          detailsText += `\n*... e mais ${sortedDetails.length - 10} thread(s)*`;
+        }
+      } else {
+        detailsText = '*Nenhuma thread de conversão encontrada*';
+      }
+
+      // Embed final com resultados
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('🔒 **LIMPEZA DE THREADS CONCLUÍDA**')
+        .setDescription(`
+**Canal analisado:** ${targetChannel}
+**Executado por:** ${message.author}
+
+## 📊 **ESTATÍSTICAS:**
+
+\`\`\`yaml
+ Threads Totais Analisadas: ${threadsProcessadas}
+ Threads de Conversão: ${threadsDetails.length}
+ Threads Abertas: ${threadsAbertas}
+ Threads Fechadas: ${threadsFechadas}
+ Critério: Mais de 1 dia de existência
+\`\`\`
+
+## 📋 **DETALHES DAS THREADS:**
+
+${detailsText}
+
+> 🔄 *Threads antigas foram automaticamente fechadas para otimizar o servidor*
+`)
+        .setColor(threadsFechadas > 0 ? '#00ff88' : '#4169e1')
+        .addFields(
+          { 
+            name: '✅ **Threads Mantidas Abertas**', 
+            value: `${threadsAbertas} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '🔒 **Threads Fechadas**', 
+            value: `${threadsFechadas} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '📊 **Total Processadas**', 
+            value: `${threadsProcessadas} thread(s)`, 
+            inline: true 
+          }
+        )
+        .setFooter({ 
+          text: 'GIFZADA CONVERSOR • Sistema de Limpeza Automática',
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await loadingMessage.edit({ embeds: [resultEmbed] });
+
+    } catch (error) {
+      console.error('Erro ao processar comando fecharconversor:', error);
+      
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ **ERRO NO PROCESSAMENTO**')
+        .setDescription(`
+**Erro ao analisar threads do canal**
+
+\`\`\`
+${error.message}
+\`\`\`
+
+> ⚠️ *Verifique se o bot tem as permissões necessárias no canal*
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      await loadingMessage.edit({ embeds: [errorEmbed] });
+    }
+    return;
   }
 
   if (message.content === '!painel') {
