@@ -30,6 +30,9 @@ const express = require('express');
 const { createCanvas, loadImage, registerFont } = require('canvas');
 require('dotenv').config();
 
+// Registrar a fonte personalizada
+registerFont('./Arial-bold.ttf', { family: 'Arial Bold' });
+
 // Configuração do PostgreSQL
 const pgClient = new PgClient({
   connectionString: process.env.DATABASE_URL
@@ -663,19 +666,19 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
 
     // Nome do usuário
     ctx.fillStyle = modoEscuro ? '#ffffff' : '#14171a';
-    ctx.font = 'bold 16px Arial';
+    ctx.font = 'bold 16px "Arial Bold"';
     ctx.fillText(displayName, 90, 45);
 
     // Handle do usuário (se não for anônimo)
     if (!anonimo) {
       ctx.fillStyle = modoEscuro ? '#8899a6' : '#657786';
-      ctx.font = '14px Arial';
+      ctx.font = '14px "Arial Bold"';
       ctx.fillText(`@${autor.username}`, 90, 65);
     }
 
     // Texto da postagem
     ctx.fillStyle = modoEscuro ? '#ffffff' : '#14171a';
-    ctx.font = '18px Arial';
+    ctx.font = '18px "Arial Bold"';
     
     // Quebrar texto em linhas
     const linhas = quebrarTexto(ctx, texto, 480);
@@ -713,13 +716,13 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
         
         // Nome do mencionado
         ctx.fillStyle = '#1da1f2';
-        ctx.font = 'bold 14px Arial';
+        ctx.font = 'bold 14px "Arial Bold"';
         ctx.fillText(`@${mencionar.displayName || mencionar.username}`, 80, yPos + 20);
       } catch (error) {
         console.error('Erro ao carregar avatar do mencionado:', error);
         // Fallback sem avatar
         ctx.fillStyle = '#1da1f2';
-        ctx.font = 'bold 14px Arial';
+        ctx.font = 'bold 14px "Arial Bold"';
         ctx.fillText(`@${mencionar.displayName || mencionar.username}`, 30, yPos + 20);
       }
     }
@@ -745,7 +748,7 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
     });
     
     ctx.fillStyle = modoEscuro ? '#8899a6' : '#657786';
-    ctx.font = '12px Arial';
+    ctx.font = '12px "Arial Bold"';
     ctx.fillText(timestamp, 450, bottomY + 25);
 
     return canvas.toBuffer('image/png');
