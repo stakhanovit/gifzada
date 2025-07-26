@@ -2255,6 +2255,19 @@ Selecione uma área para acessar suas funções específicas:
 });
 
 client.on('interactionCreate', async interaction => {
+  // Verificar se a interação ainda é válida
+  if (interaction.replied || interaction.deferred) {
+    console.log('Interação já foi processada, ignorando');
+    return;
+  }
+
+  // Verificar se a interação não expirou (mais de 2.5 segundos)
+  const interactionAge = Date.now() - interaction.createdTimestamp;
+  if (interactionAge > 2500) {
+    console.log(`Interação expirada (${interactionAge}ms), ignorando`);
+    return;
+  }
+
   // Handler para comandos slash
   if (interaction.isChatInputCommand()) {
     const { commandName, member, channel, options } = interaction;
@@ -3889,7 +3902,14 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
 
   // Verificar se a interação ainda é válida
   if (interaction.replied || interaction.deferred) {
-    console.log('Interação já foi processada, ignorando');
+    console.log('Interação de botão já foi processada, ignorando');
+    return;
+  }
+
+  // Verificar se a interação não expirou (mais de 2.5 segundos)
+  const buttonInteractionAge = Date.now() - interaction.createdTimestamp;
+  if (buttonInteractionAge > 2500) {
+    console.log(`Interação de botão expirada (${buttonInteractionAge}ms), ignorando`);
     return;
   }
 
@@ -6015,13 +6035,25 @@ Sistema para gerenciar usuários bloqueados no recrutamento
     const hasAdminRole = interaction.member.roles.cache.some(role => adminRoles.includes(role.id));
 
     if (!hasStaffRole && !hasAdminRole) {
-      return interaction.reply({
-        content: '❌ Acesso negado.',
-        ephemeral: true
-      });
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          return await interaction.reply({
+            content: '❌ Acesso negado.',
+            ephemeral: true
+          });
+        }
+      } catch (error) {
+        console.error('Erro ao responder interação de acesso negado:', error);
+        return;
+      }
     }
 
     try {
+      // Defer a resposta para ter mais tempo de processamento
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.deferReply({ ephemeral: true });
+      }
+
       const performanceStats = await getStaffPerformanceStats();
 
       let statsText = '';
@@ -6120,13 +6152,27 @@ ${statsText}
           .setStyle(ButtonStyle.Secondary)
       );
 
-      await interaction.reply({ embeds: [desempenhoEmbed], components: [desempenhoRow], ephemeral: true });
+      if (interaction.deferred) {
+        await interaction.editReply({ embeds: [desempenhoEmbed], components: [desempenhoRow] });
+      } else if (!interaction.replied) {
+        await interaction.reply({ embeds: [desempenhoEmbed], components: [desempenhoRow], ephemeral: true });
+      }
     } catch (error) {
       console.error('Erro ao buscar desempenho:', error);
-      await interaction.reply({
-        content: '❌ Erro ao carregar estatísticas de desempenho.',
-        ephemeral: true
-      });
+      try {
+        if (interaction.deferred) {
+          await interaction.editReply({
+            content: '❌ Erro ao carregar estatísticas de desempenho.'
+          });
+        } else if (!interaction.replied) {
+          await interaction.reply({
+            content: '❌ Erro ao carregar estatísticas de desempenho.',
+            ephemeral: true
+          });
+        }
+      } catch (replyError) {
+        console.error('Erro ao responder erro de desempenho:', replyError);
+      }
     }
   }
 
