@@ -1575,7 +1575,8 @@ client.on('messageCreate', async message => {
     try {
       // Baixar e reenviar o arquivo para garantir permanência
       const response = await fetch(attachment.url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
       const fileAttachment = new AttachmentBuilder(buffer, { name: attachment.name });
 
       // Enviar via webhook e aguardar a resposta
@@ -1624,7 +1625,7 @@ client.on('messageCreate', async message => {
     if (!hasStaffRole) {
       return message.reply({
         content: '❌ Apenas membros da staff podem usar este comando.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -1782,7 +1783,7 @@ client.on('messageCreate', async message => {
     if (!hasStaffRole && !hasAdminRole) {
       return message.reply({
         content: '❌ Apenas staffs ou administradores podem usar este comando.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -1791,7 +1792,7 @@ client.on('messageCreate', async message => {
     if (!channelId) {
       return message.reply({
         content: '❌ Por favor, forneça o ID do canal.\n**Uso:** `!fecharconversor [ID_DO_CANAL]`',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -1800,7 +1801,7 @@ client.on('messageCreate', async message => {
     if (!targetChannel) {
       return message.reply({
         content: '❌ Canal não encontrado. Verifique se o ID está correto.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2147,7 +2148,7 @@ ${error.message}
     if (!hasStaffRole && !hasAdminRole) {
       return message.reply({
         content: '❌ Apenas staffs ou administradores podem usar este comando.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2291,7 +2292,7 @@ client.on('interactionCreate', async interaction => {
     if (!member) {
       return interaction.reply({
         content: '❌ Não foi possível verificar suas permissões. Tente novamente.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2301,7 +2302,7 @@ client.on('interactionCreate', async interaction => {
     if (!hasAuthorizedRole) {
       return interaction.reply({
         content: '❌ Você não tem permissão para usar este comando. Apenas membros da staff podem usar comandos de bloqueio/desbloqueio.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2322,12 +2323,12 @@ client.on('interactionCreate', async interaction => {
           .setTimestamp()
           .setFooter({ text: `Fechado por ${interaction.user.username}` });
 
-        await interaction.reply({ embeds: [lockEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [lockEmbed],flags: 1 << 6 });
       } catch (error) {
         console.error('Erro ao fechar canal:', error);
         await interaction.reply({
           content: '❌ Erro ao fechar o canal. Verifique se o bot tem as permissões necessárias.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
     }
@@ -2349,12 +2350,12 @@ client.on('interactionCreate', async interaction => {
           .setTimestamp()
           .setFooter({ text: `Aberto por ${interaction.user.username}` });
 
-        await interaction.reply({ embeds: [unlockEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [unlockEmbed],flags: 1 << 6 });
       } catch (error) {
         console.error('Erro ao abrir canal:', error);
         await interaction.reply({
           content: '❌ Erro ao abrir o canal. Verifique se o bot tem as permissões necessárias.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
     }
@@ -2367,7 +2368,7 @@ client.on('interactionCreate', async interaction => {
       if (!hasStaffRole) {
         return interaction.reply({
           content: '❌ Apenas membros da staff podem usar este comando.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2377,7 +2378,7 @@ client.on('interactionCreate', async interaction => {
       if (!targetMember) {
         return interaction.reply({
           content: '❌ Usuário não encontrado no servidor.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2412,7 +2413,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({
         embeds: [confirmEmbed],
         components: [confirmRow],
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2424,7 +2425,7 @@ client.on('interactionCreate', async interaction => {
       if (!hasStaffRole) {
         return interaction.reply({
           content: '❌ Apenas membros da staff podem usar este comando.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2434,7 +2435,7 @@ client.on('interactionCreate', async interaction => {
       if (!targetMember) {
         return interaction.reply({
           content: '❌ Usuário não encontrado no servidor.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2466,7 +2467,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({
         embeds: [confirmEmbed],
         components: [confirmRow],
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -2523,7 +2524,7 @@ client.on('interactionCreate', async interaction => {
       if (blacklistCheck) {
         return interaction.reply({
           content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2534,7 +2535,7 @@ client.on('interactionCreate', async interaction => {
         if (threadChannel && !threadChannel.archived) {
           return interaction.reply({
             content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-            ephemeral: true
+           flags: 1 << 6
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -2606,7 +2607,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       await interaction.reply({ 
         content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
 
@@ -2617,7 +2618,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (blacklistCheck) {
         return interaction.reply({
           content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2628,7 +2629,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (threadChannel && !threadChannel.archived) {
           return interaction.reply({
             content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-            ephemeral: true
+           flags: 1 << 6
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -2700,7 +2701,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       await interaction.reply({ 
         content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
 
@@ -2713,7 +2714,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (threadChannel && !threadChannel.archived) {
           return interaction.reply({
             content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-            ephemeral: true
+           flags: 1 << 6
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -2781,7 +2782,7 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
 
       await interaction.reply({ 
         content: `**Seu ticket de suporte foi aberto com sucesso!** ${thread}`, 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
 
@@ -2794,7 +2795,7 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
         if (threadChannel && !threadChannel.archived) {
           return interaction.reply({
             content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-            ephemeral: true
+           flags: 1 << 6
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -2862,7 +2863,7 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
 
       await interaction.reply({ 
         content: `**Seu ticket de denúncia foi aberto com sucesso!** ${thread}`, 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
 
@@ -2873,7 +2874,7 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       if (blacklistCheck) {
         return interaction.reply({
           content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -2884,7 +2885,7 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
         if (threadChannel && !threadChannel.archived) {
           return interaction.reply({
             content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-            ephemeral: true
+           flags: 1 << 6
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -2956,7 +2957,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       await interaction.reply({ 
         content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
 
@@ -2967,13 +2968,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
       try {
         await addComment(postId, interaction.user.id, commentText);
-        await interaction.reply({ content: '💬 Comentário adicionado com sucesso!', ephemeral: true });
+        await interaction.reply({ content: '💬 Comentário adicionado com sucesso!',flags: 1 << 6 });
       } catch (error) {
         console.error('Erro ao adicionar comentário:', error);
         if (error.message.includes('Limite de 2 comentários')) {
-          await interaction.reply({ content: '❌ Você já atingiu o limite de 2 comentários por postagem.', ephemeral: true });
+          await interaction.reply({ content: '❌ Você já atingiu o limite de 2 comentários por postagem.',flags: 1 << 6 });
         } else {
-          await interaction.reply({ content: '❌ Erro ao adicionar comentário. Tente novamente.', ephemeral: true });
+          await interaction.reply({ content: '❌ Erro ao adicionar comentário. Tente novamente.',flags: 1 << 6 });
         }
       }
     }
@@ -2984,13 +2985,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       const commentNumber = parseInt(interaction.fields.getTextInputValue('comment_number'));
 
       if (!postComments.has(postId)) {
-        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+        return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
       }
 
       const comments = postComments.get(postId);
 
       if (commentNumber < 1 || commentNumber > comments.length) {
-        return interaction.reply({ content: '❌ Número de comentário inválido.', ephemeral: true });
+        return interaction.reply({ content: '❌ Número de comentário inválido.',flags: 1 << 6 });
       }
 
       const deletedComment = comments[commentNumber - 1];
@@ -3006,7 +3007,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       // Salvar no database
       saveDatabase();
 
-      await interaction.reply({ content: '✅ Comentário deletado com sucesso!', ephemeral: true });
+      await interaction.reply({ content: '✅ Comentário deletado com sucesso!',flags: 1 << 6 });
     }
 
     // Handler para modal de bloquear usuário
@@ -3020,12 +3021,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ Usuário ${user.username} (${userId}) foi adicionado à blacklist de recrutamento!\n**Motivo:** ${reason}`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao adicionar usuário à blacklist. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3037,7 +3038,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (!isBlacklisted) {
         return interaction.reply({ 
           content: '❌ Este usuário não está na blacklist de recrutamento.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
 
@@ -3047,12 +3048,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ Usuário ${user.username} (${userId}) foi removido da blacklist de recrutamento!`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao remover usuário da blacklist. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3067,12 +3068,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ Usuário ${user.username} (${userId}) foi bloqueado de usar verificação!\n**Motivo:** ${reason}`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3083,7 +3084,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (!blockedVerificationUsers.has(userId)) {
         return interaction.reply({ 
           content: '❌ Este usuário não está bloqueado.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
 
@@ -3093,12 +3094,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ Usuário ${user.username} (${userId}) foi desbloqueado e pode usar verificação novamente!`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3123,9 +3124,9 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
           }
         }
 
-        await interaction.reply({ content: '✅ Postagem deletada com sucesso!', ephemeral: true });
+        await interaction.reply({ content: '✅ Postagem deletada com sucesso!',flags: 1 << 6 });
       } catch (error) {
-        await interaction.reply({ content: '❌ Erro ao deletar postagem. Verifique se o ID da mensagem está correto.', ephemeral: true });
+        await interaction.reply({ content: '❌ Erro ao deletar postagem. Verifique se o ID da mensagem está correto.',flags: 1 << 6 });
       }
     }
 
@@ -3134,13 +3135,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       const commentNumber = parseInt(interaction.fields.getTextInputValue('comment_number'));
 
       if (!postComments.has(postId)) {
-        return interaction.reply({ content: '❌ Post não encontrado. Verifique se o ID da postagem está correto.', ephemeral: true });
+        return interaction.reply({ content: '❌ Post não encontrado. Verifique se o ID da postagem está correto.',flags: 1 << 6 });
       }
 
       const comments = postComments.get(postId);
 
       if (commentNumber < 1 || commentNumber > comments.length) {
-        return interaction.reply({ content: '❌ Número de comentário inválido.', ephemeral: true });
+        return interaction.reply({ content: '❌ Número de comentário inválido.',flags: 1 << 6 });
       }
 
       // Substituir o comentário por mensagem de restrição
@@ -3150,7 +3151,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         timestamp: Date.now()
       };
 
-      await interaction.reply({ content: '✅ Comentário restrito com sucesso!', ephemeral: true });
+      await interaction.reply({ content: '✅ Comentário restrito com sucesso!',flags: 1 << 6 });
     }
 
     if (interaction.customId === 'admin_remove_verified_modal') {
@@ -3162,12 +3163,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         if (member.roles.cache.has(verifiedRoleId)) {
           await member.roles.remove(verifiedRoleId);
-          await interaction.reply({ content: `✅ Cargo de verificado removido de ${member.user.username}!`, ephemeral: true });
+          await interaction.reply({ content: `✅ Cargo de verificado removido de ${member.user.username}!`,flags: 1 << 6 });
         } else {
-          await interaction.reply({ content: '❌ Este usuário não possui o cargo de verificado.', ephemeral: true });
+          await interaction.reply({ content: '❌ Este usuário não possui o cargo de verificado.',flags: 1 << 6 });
         }
       } catch (error) {
-        await interaction.reply({ content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', ephemeral: true });
+        await interaction.reply({ content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.',flags: 1 << 6 });
       }
     }
 
@@ -3209,14 +3210,14 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (currentRoleIndex === -1) {
           return interaction.reply({ 
             content: '❌ Este usuário não possui nenhum cargo da hierarquia de makers.', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
         if (currentRoleIndex === hierarchy.length - 1) {
           return interaction.reply({ 
             content: '❌ Este usuário já está no cargo mais alto (Lendário).', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
@@ -3229,13 +3230,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ ${member.user.username} foi upado de **${roleNames[currentRoleIndex]}** para **${roleNames[currentRoleIndex + 1]}**!`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
 
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3270,7 +3271,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (!member.roles.cache.has(specialRole)) {
           return interaction.reply({ 
             content: '❌ Este usuário não possui o cargo necessário para ser rebaixado.', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
@@ -3286,14 +3287,14 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (currentRoleIndex === -1) {
           return interaction.reply({ 
             content: '❌ Este usuário não possui nenhum cargo da hierarquia de makers.', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
         if (currentRoleIndex === 0) {
           return interaction.reply({ 
             content: '❌ Este usuário já está no cargo mais baixo (Iniciante).', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
@@ -3306,13 +3307,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ ${member.user.username} foi rebaixado de **${roleNames[currentRoleIndex]}** para **${roleNames[currentRoleIndex - 1]}**!`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
 
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3343,7 +3344,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (rolesToActuallyRemove.length === 0) {
           return interaction.reply({ 
             content: '❌ Este usuário não possui nenhum dos cargos de maker para ser removido.', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         }
 
@@ -3352,13 +3353,13 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
 
         await interaction.reply({ 
           content: `✅ Todos os cargos de maker foram removidos de ${member.user.username}! (${rolesToActuallyRemove.length} cargos removidos)`, 
-          ephemeral: true 
+         flags: 1 << 6 
         });
 
       } catch (error) {
         await interaction.reply({ 
           content: '❌ Erro ao encontrar o usuário. Verifique se o ID está correto.', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     }
@@ -3372,7 +3373,7 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
         if (!staffStats) {
           return interaction.reply({
             content: '❌ Nenhuma estatística encontrada para este staff. Verifique se o ID está correto ou se o staff já recebeu feedbacks.',
-            ephemeral: true
+           flags: 1 << 6
           });
         }
 
@@ -3432,13 +3433,13 @@ ${detailText}
           .setThumbnail(staffUser.displayAvatarURL({ dynamic: true }))
           .setTimestamp();
 
-        await interaction.reply({ embeds: [individualEmbed], ephemeral: true });
+        await interaction.reply({ embeds: [individualEmbed],flags: 1 << 6 });
 
       } catch (error) {
         console.error('Erro ao buscar staff individual:', error);
         await interaction.reply({
           content: '❌ Erro ao buscar estatísticas. Verifique se o ID do staff está correto.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
     }
@@ -3451,7 +3452,7 @@ ${detailText}
       if (!youtubeUrl) {
         return interaction.reply({
           content: '❌ Por favor, forneça um link válido do YouTube.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3511,7 +3512,7 @@ ${detailText}
       if (isNaN(percentageNum) || percentageNum < 1 || percentageNum > 100) {
         return interaction.reply({
           content: '❌ Por favor, insira uma porcentagem válida entre 1 e 100.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3535,7 +3536,7 @@ ${detailText}
       if (isNaN(width) || isNaN(height) || width < 1 || height < 1) {
         return interaction.reply({
           content: '❌ Por favor, insira dimensões válidas (números positivos).',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3563,7 +3564,7 @@ ${detailText}
       if (!validFormats.includes(targetFormat)) {
         return interaction.reply({
           content: '❌ Formato inválido. Use: png, jpg, webp, gif, bmp ou tiff.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3607,7 +3608,7 @@ ${detailText}
       if (!tiktokUrl) {
         return interaction.reply({
           content: '❌ Por favor, forneça um link válido do TikTok.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3687,7 +3688,7 @@ ${detailText}
       if (!tiktokUrl && !instagramUrl) {
         return interaction.reply({
           content: 'Por favor, preencha pelo menos um dos campos com um link válido.',
-          ephemeral: true
+         flags: 1 << 6
         });
       }
 
@@ -3895,7 +3896,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
       await interaction.reply({ 
         embeds: [categoryEmbed], 
         components: [colorButtons], 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
     return;
@@ -4104,7 +4105,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
       try {
-        await interaction.reply({ content: 'Thread criada com sucesso!', ephemeral: true });
+        await interaction.reply({ content: 'Thread criada com sucesso!',flags: 1 << 6 });
       } catch (error) {
         console.error('Erro ao responder interação:', error);
         // Se a interação expirou, tentar enviar uma mensagem normal
@@ -4122,7 +4123,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
       console.error('Canal não encontrado na interação:', interaction);
       return interaction.reply({
         content: '❌ Erro interno: canal não encontrado. Tente novamente.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -4707,7 +4708,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     if (!hasPermission) {
       return interaction.reply({
         content: errorMessage,
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -4775,7 +4776,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
         const minutesLeft = Math.ceil(timeLeft / 60000);
         return interaction.reply({
           content: `⏰ Você deve aguardar ${minutesLeft} minuto(s) antes de chamar a staff novamente.`,
-          ephemeral: true
+         flags: 1 << 6
         });
       }
     }
@@ -4807,7 +4808,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     if (!hasPermission) {
       return interaction.reply({
         content: errorMessage,
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -4948,7 +4949,7 @@ GIFs: Todos os tipos (animados e estáticos)
       .setColor('#ff6b6b')
       .setFooter({ text: 'Seja detalhado caso abra um ticket!' });
 
-    await interaction.reply({ embeds: [supportEmbed], ephemeral: true });
+    await interaction.reply({ embeds: [supportEmbed],flags: 1 << 6 });
   }
 
   // Handler para verificação
@@ -4957,7 +4958,7 @@ GIFs: Todos os tipos (animados e estáticos)
     if (blockedVerificationUsers.has(user.id)) {
       return interaction.reply({
         content: '🚫 **Você está bloqueado pela administração**\n\nVocê não pode iniciar processos de verificação. Entre em contato com o suporte para mais informações.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -4969,7 +4970,7 @@ GIFs: Todos os tipos (animados e estáticos)
       if (existingThread && !existingThread.archived) {
         return interaction.reply({
           content: `❌ **Você já possui um processo de verificação ativo!**\n\nAcesse sua thread: ${existingThread}`,
-          ephemeral: true
+         flags: 1 << 6
         });
       } else {
         // Se a thread não existe mais ou está arquivada, remover do mapa
@@ -5050,7 +5051,7 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
 
     await interaction.reply({ 
       content: `**Seu processo de verificação foi iniciado!** ${thread}`, 
-      ephemeral: true 
+     flags: 1 << 6 
     });
   }
 
@@ -5079,7 +5080,7 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
     } else {
       await interaction.reply({ 
         content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -5119,7 +5120,7 @@ Thread será arquivada em alguns segundos...
     } else {
       await interaction.reply({ 
         content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -5132,7 +5133,7 @@ Thread será arquivada em alguns segundos...
     if (!hasRecruitmentRole && !hasStaffRole) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de recrutamento ou staff podem apadrinhar makers.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5196,7 +5197,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
     await interaction.reply({
       content: mensagemApadrinhamento,
-      ephemeral: true
+     flags: 1 << 6
     });
   }
 
@@ -5207,7 +5208,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     if (!targetMember) {
       return interaction.reply({
         content: '❌ Usuário não encontrado no servidor.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5262,7 +5263,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
       console.error('Erro ao adicionar cargos de maker:', error);
       await interaction.reply({
         content: '❌ Erro ao adicionar os cargos. Verifique se o bot tem permissões adequadas.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
   }
@@ -5274,7 +5275,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     if (!targetMember) {
       return interaction.reply({
         content: '❌ Usuário não encontrado no servidor.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5321,7 +5322,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
       console.error('Erro ao adicionar cargo de postador:', error);
       await interaction.reply({
         content: '❌ Erro ao adicionar o cargo. Verifique se o bot tem permissões adequadas.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
   }
@@ -5363,7 +5364,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     if (!assignment) {
       return interaction.reply({
         content: '❌ Erro: Não foi possível processar seu feedback.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5371,7 +5372,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     if (interaction.user.id !== assignment.userId) {
       return interaction.reply({
         content: '❌ Apenas o usuário que abriu o ticket pode dar feedback.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5379,7 +5380,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     if (feedbackGiven.has(threadId)) {
       return interaction.reply({
         content: '❌ Feedback já foi registrado para este ticket.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5436,7 +5437,7 @@ Thread será fechada em alguns segundos...
     if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de verificação podem usar este botão.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5445,7 +5446,7 @@ Thread será fechada em alguns segundos...
     if (assignedStaffId && assignedStaffId !== interaction.user.id) {
       return interaction.reply({
         content: '❌ Apenas o staff que assumiu esta verificação pode usar este botão.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5455,7 +5456,7 @@ Thread será fechada em alguns segundos...
     if (!targetMember) {
       return interaction.reply({
         content: '❌ Usuário não encontrado no servidor.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5512,7 +5513,7 @@ Thread será fechada em alguns segundos...
       console.error('Erro ao adicionar cargo de verificado:', error);
       await interaction.reply({
         content: '❌ Erro ao adicionar o cargo de verificado. Verifique se o bot tem permissões adequadas.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
   }
@@ -5524,7 +5525,7 @@ Thread será fechada em alguns segundos...
     if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de verificação podem assumir verificações.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5574,7 +5575,7 @@ Thread será fechada em alguns segundos...
     if (!interaction.member.roles.cache.has(verificationStaffRoleId)) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de verificação podem usar este botão.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5583,7 +5584,7 @@ Thread será fechada em alguns segundos...
     if (assignedStaffId && assignedStaffId !== interaction.user.id) {
       return interaction.reply({
         content: '❌ Apenas o staff que assumiu esta verificação pode usar este botão.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5657,11 +5658,11 @@ Thread será arquivada em alguns segundos...
     const authorId = postAuthors.get(postId);
 
     if (!authorId) {
-      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+      return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
     }
 
     if (interaction.user.id !== authorId) {
-      return interaction.reply({ content: '❌ Apenas o autor do post pode acessar as configurações.', ephemeral: true });
+      return interaction.reply({ content: '❌ Apenas o autor do post pode acessar as configurações.',flags: 1 << 6 });
     }
 
     const settingsEmbed = new EmbedBuilder()
@@ -5696,7 +5697,7 @@ Thread será arquivada em alguns segundos...
         .setStyle(ButtonStyle.Secondary)
     );
 
-    await interaction.reply({ embeds: [settingsEmbed], components: [settingsRow1, settingsRow2], ephemeral: true });
+    await interaction.reply({ embeds: [settingsEmbed], components: [settingsRow1, settingsRow2],flags: 1 << 6 });
   }
 
   // Handlers para blacklist
@@ -5707,7 +5708,7 @@ Thread será arquivada em alguns segundos...
     if (!hasRecruitmentRole) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de recrutamento podem gerenciar a blacklist.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5743,7 +5744,7 @@ Thread será arquivada em alguns segundos...
     if (!hasRecruitmentRole) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de recrutamento podem gerenciar a blacklist.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5771,7 +5772,7 @@ Thread será arquivada em alguns segundos...
     if (!hasRecruitmentRole) {
       return interaction.reply({
         content: '❌ Apenas membros da equipe de recrutamento podem ver a blacklist.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5780,7 +5781,7 @@ Thread será arquivada em alguns segundos...
     if (blacklistUsers.length === 0) {
       return interaction.reply({
         content: '📜 **Blacklist de Recrutamento vazia**\n\nNão há usuários bloqueados no sistema de recrutamento.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5810,7 +5811,7 @@ Thread será arquivada em alguns segundos...
       .setFooter({ text: `Total: ${blacklistUsers.length} usuário(s) na blacklist` })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [blacklistEmbed], ephemeral: true });
+    await interaction.reply({ embeds: [blacklistEmbed],flags: 1 << 6 });
   }
 
   // Handler para botão de bloquear usuário
@@ -5844,7 +5845,7 @@ Thread será arquivada em alguns segundos...
     if (blockedVerificationUsers.size === 0) {
       return interaction.reply({
         content: '📋 **Nenhum usuário bloqueado**\n\nNão há usuários bloqueados no sistema de verificação.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5866,14 +5867,14 @@ Thread será arquivada em alguns segundos...
       .setFooter({ text: `Total: ${blockedVerificationUsers.size} usuário(s) bloqueado(s)` })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [blockedEmbed], ephemeral: true });
+    await interaction.reply({ embeds: [blockedEmbed],flags: 1 << 6 });
   }
 
   if (customId === 'admin_unblock_user') {
     if (blockedVerificationUsers.size === 0) {
       return interaction.reply({
         content: '❌ Não há usuários bloqueados para desbloquear.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5904,7 +5905,7 @@ Thread será arquivada em alguns segundos...
     if (!hasStaffRole && !hasAdminRole) {
       return interaction.reply({
         content: '❌ Acesso negado.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -5973,7 +5974,7 @@ Sistema de verificação de usuários
         .setStyle(ButtonStyle.Secondary)
     );
 
-    await interaction.reply({ embeds: [instagramEmbed], components: [instagramRow1, instagramRow2], ephemeral: true });
+    await interaction.reply({ embeds: [instagramEmbed], components: [instagramRow1, instagramRow2],flags: 1 << 6 });
   }
 
   if (customId === 'painel_recrutamento') {
@@ -5985,7 +5986,7 @@ Sistema de verificação de usuários
     if (!hasStaffRole && !hasAdminRole) {
       return interaction.reply({
         content: '❌ Acesso negado.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -6028,7 +6029,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
         .setStyle(ButtonStyle.Secondary)
     );
 
-    await interaction.reply({ embeds: [recrutamentoEmbed], components: [recrutamentoRow], ephemeral: true });
+    await interaction.reply({ embeds: [recrutamentoEmbed], components: [recrutamentoRow],flags: 1 << 6 });
   }
 
   if (customId === 'painel_desempenho') {
@@ -6042,7 +6043,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
         if (!interaction.replied && !interaction.deferred) {
           return await interaction.reply({
             content: '❌ Acesso negado.',
-            ephemeral: true
+           flags: 1 << 6
           });
         }
       } catch (error) {
@@ -6054,7 +6055,7 @@ Sistema para gerenciar usuários bloqueados no recrutamento
     try {
       // Defer a resposta para ter mais tempo de processamento
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({flags: 1 << 6 });
       }
 
       const performanceStats = await getStaffPerformanceStats();
@@ -6158,7 +6159,7 @@ ${statsText}
       if (interaction.deferred) {
         await interaction.editReply({ embeds: [desempenhoEmbed], components: [desempenhoRow] });
       } else if (!interaction.replied) {
-        await interaction.reply({ embeds: [desempenhoEmbed], components: [desempenhoRow], ephemeral: true });
+        await interaction.reply({ embeds: [desempenhoEmbed], components: [desempenhoRow],flags: 1 << 6 });
       }
     } catch (error) {
       console.error('Erro ao buscar desempenho:', error);
@@ -6170,7 +6171,7 @@ ${statsText}
         } else if (!interaction.replied) {
           await interaction.reply({
             content: '❌ Erro ao carregar estatísticas de desempenho.',
-            ephemeral: true
+           flags: 1 << 6
           });
         }
       } catch (replyError) {
@@ -6186,7 +6187,7 @@ ${statsText}
     if (!hasAdminRole) {
       return interaction.reply({
         content: '❌ Apenas administradores podem acessar esta área.',
-        ephemeral: true
+       flags: 1 << 6
       });
     }
 
@@ -6237,7 +6238,7 @@ Sistema para gerenciar hierarquia de makers
         .setStyle(ButtonStyle.Secondary)
     );
 
-    await interaction.reply({ embeds: [administracaoEmbed], components: [adminRow], ephemeral: true });
+    await interaction.reply({ embeds: [administracaoEmbed], components: [adminRow],flags: 1 << 6 });
   }
 
   if (customId === 'staff_individual_stats') {
@@ -6458,13 +6459,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações Gerais**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações Gerais**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6477,13 +6478,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações: Pedidos-gif**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações: Pedidos-gif**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6496,13 +6497,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações: Pedidos-Icon**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações: Pedidos-Icon**!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6527,13 +6528,13 @@ Selecione uma área para acessar suas funções específicas:
         await member.roles.remove(roleId);
         await interaction.reply({ 
           content: '<:d_brush:1398752562072522843> Você removeu a cor do seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } else {
         await member.roles.add(roleId);
         await interaction.reply({ 
           content: '<:d_brush:1398752562072522843> Você recebeu a cor **Roxa** no seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     } catch (error) {
@@ -6542,7 +6543,7 @@ Selecione uma área para acessar suas funções específicas:
         try {
           await interaction.reply({ 
             content: '❌ Erro ao alterar cor do nick. Tente novamente.', 
-            ephemeral: true 
+           flags: 1 << 6 
           });
         } catch (replyError) {
           console.error('Erro ao responder interação:', replyError);
@@ -6565,13 +6566,13 @@ Selecione uma área para acessar suas funções específicas:
         await member.roles.remove(roleId);
         await interaction.reply({ 
           content: '<:y_brush:1398752431902298152> Você removeu a cor do seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } else {
         await member.roles.add(roleId);
         await interaction.reply({ 
           content: '<:y_brush:1398752431902298152> Você recebeu a cor **Azul** no seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     } catch (error) {
@@ -6593,13 +6594,13 @@ Selecione uma área para acessar suas funções específicas:
         await member.roles.remove(roleId);
         await interaction.reply({ 
           content: '<:o_brush:1398752246338027530> Você removeu a cor do seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } else {
         await member.roles.add(roleId);
         await interaction.reply({ 
           content: '<:o_brush:1398752246338027530> Você recebeu a cor **Verde** no seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     } catch (error) {
@@ -6621,13 +6622,13 @@ Selecione uma área para acessar suas funções específicas:
         await member.roles.remove(roleId);
         await interaction.reply({ 
           content: '<:e_brush:1398751907853631539> Você removeu a cor do seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } else {
         await member.roles.add(roleId);
         await interaction.reply({ 
           content: '<:e_brush:1398751907853631539> Você recebeu a cor **Amarela** no seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     } catch (error) {
@@ -6649,13 +6650,13 @@ Selecione uma área para acessar suas funções específicas:
         await member.roles.remove(roleId);
         await interaction.reply({ 
           content: '<:f_brush:1398752104285343918> Você removeu a cor do seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       } else {
         await member.roles.add(roleId);
         await interaction.reply({ 
           content: '<:f_brush:1398752104285343918> Você recebeu a cor **Laranja** no seu nick!', 
-          ephemeral: true 
+         flags: 1 << 6 
         });
       }
     } catch (error) {
@@ -6680,13 +6681,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:p_brush:1398758670761988157> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:p_brush:1398758670761988157> Você recebeu a cor **Pastel** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6706,13 +6707,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:p_brush1:1398758933182550067> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:p_brush1:1398758933182550067> Você recebeu a cor **Pastel** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6732,13 +6733,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:p_brush2:1398759046445535393> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:p_brush2:1398759046445535393> Você recebeu a cor **Pastel** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6758,13 +6759,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:p_brush3:1398759435345858561> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:p_brush3:1398759435345858561> Você recebeu a cor **Pastel** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6784,13 +6785,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:p_brush4:1398759757027999744> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:p_brush4:1398759757027999744> Você recebeu a cor **Pastel** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6811,13 +6812,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:n_brush:1398759884815863950> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:n_brush:1398759884815863950> Você recebeu a cor **Neon** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6837,13 +6838,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:n_brush1:1398759976343961712> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:n_brush1:1398759976343961712> Você recebeu a cor **Neon** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6863,13 +6864,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:n_brush2:1398760077686472815> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:n_brush2:1398760077686472815> Você recebeu a cor **Neon** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6890,13 +6891,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:m_brush:1398760429248970753> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:m_brush:1398760429248970753> Você recebeu a cor **Metálica** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6916,13 +6917,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:m_brush1:1398760537738969198> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:m_brush1:1398760537738969198> Você recebeu a cor **Metálica** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6942,13 +6943,13 @@ Selecione uma área para acessar suas funções específicas:
       await member.roles.remove(roleId);
       await interaction.reply({ 
         content: '<:m_brush2:1398760653413679167> Você removeu a cor do seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     } else {
       await member.roles.add(roleId);
       await interaction.reply({ 
         content: '<:m_brush2:1398760653413679167> Você recebeu a cor **Metálica** no seu nick!', 
-        ephemeral: true 
+       flags: 1 << 6 
       });
     }
   }
@@ -6959,7 +6960,7 @@ Selecione uma área para acessar suas funções específicas:
     const comments = postComments.get(postId);
 
     if (!comments || comments.length === 0) {
-      return interaction.reply({ content: '❌ Nenhum comentário encontrado neste post.', ephemeral: true });
+      return interaction.reply({ content: '❌ Nenhum comentário encontrado neste post.',flags: 1 << 6 });
     }
 
     const commentsList = comments.map((comment, index) => {
@@ -6982,7 +6983,7 @@ Selecione uma área para acessar suas funções específicas:
         .setStyle(ButtonStyle.Danger)
     );
 
-    await interaction.reply({ embeds: [deleteCommentEmbed], components: [deleteCommentRow], ephemeral: true });
+    await interaction.reply({ embeds: [deleteCommentEmbed], components: [deleteCommentRow],flags: 1 << 6 });
   }
 
   // Handler para confirmar deletar comentário
@@ -7016,10 +7017,10 @@ Selecione uma área para acessar suas funções específicas:
       await updatePostPrivacy(postId, newPrivacy, null);
 
       const status = newPrivacy ? 'privados' : 'públicos';
-      await interaction.reply({ content: `✅ Comentários agora estão ${status}.`, ephemeral: true });
+      await interaction.reply({ content: `✅ Comentários agora estão ${status}.`,flags: 1 << 6 });
     } catch (error) {
       console.error('Erro ao atualizar privacidade de comentários:', error);
-      await interaction.reply({ content: '❌ Erro ao atualizar configuração.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao atualizar configuração.',flags: 1 << 6 });
     }
   }
 
@@ -7033,10 +7034,10 @@ Selecione uma área para acessar suas funções específicas:
       await updatePostPrivacy(postId, null, newPrivacy);
 
       const status = newPrivacy ? 'privadas' : 'públicas';
-      await interaction.reply({ content: `✅ Curtidas agora estão ${status}.`, ephemeral: true });
+      await interaction.reply({ content: `✅ Curtidas agora estão ${status}.`,flags: 1 << 6 });
     } catch (error) {
       console.error('Erro ao atualizar privacidade de curtidas:', error);
-      await interaction.reply({ content: '❌ Erro ao atualizar configuração.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao atualizar configuração.',flags: 1 << 6 });
     }
   }
 
@@ -7058,11 +7059,11 @@ Selecione uma área para acessar suas funções específicas:
             console.log(`Post ${postId} criado automaticamente no banco`);
           } else {
             console.error('Formato de postId inválido:', postId);
-            return interaction.reply({ content: '❌ Post não encontrado. ID do post inválido.', ephemeral: true });
+            return interaction.reply({ content: '❌ Post não encontrado. ID do post inválido.',flags: 1 << 6 });
           }
         } catch (createError) {
           console.error('Erro ao criar post automaticamente:', createError);
-          return interaction.reply({ content: '❌ Erro ao processar like. Post não encontrado no sistema.', ephemeral: true });
+          return interaction.reply({ content: '❌ Erro ao processar like. Post não encontrado no sistema.',flags: 1 << 6 });
         }
       }
 
@@ -7070,13 +7071,13 @@ Selecione uma área para acessar suas funções específicas:
       const result = await toggleLike(postId, userId);
 
       if (result.action === 'removed') {
-        await interaction.reply({ content: '<:unlike:1392244549468033126> Você removeu seu like!', ephemeral: true });
+        await interaction.reply({ content: '<:unlike:1392244549468033126> Você removeu seu like!',flags: 1 << 6 });
       } else {
-        await interaction.reply({ content: '<:like:1392240788955598930> Você curtiu este post!', ephemeral: true });
+        await interaction.reply({ content: '<:like:1392240788955598930> Você curtiu este post!',flags: 1 << 6 });
       }
     } catch (error) {
       console.error('Erro ao processar like:', error);
-      return interaction.reply({ content: '❌ Erro ao processar like. Tente novamente.', ephemeral: true });
+      return interaction.reply({ content: '❌ Erro ao processar like. Tente novamente.',flags: 1 << 6 });
     }
 
     // Buscar contagem atual de likes
@@ -7169,18 +7170,18 @@ Selecione uma área para acessar suas funções específicas:
     try {
       const post = await getPost(postId);
       if (!post) {
-        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+        return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
       }
 
       const settings = await getPostPrivacy(postId);
       if (settings.likes_private) {
-        return interaction.reply({ content: '🔒 A lista de curtidas desta postagem foi privada pelo autor.', ephemeral: true });
+        return interaction.reply({ content: '🔒 A lista de curtidas desta postagem foi privada pelo autor.',flags: 1 << 6 });
       }
 
       const likes = await getPostLikes(postId);
 
       if (likes.length === 0) {
-        return interaction.reply({ content: '💔 Nenhuma curtida ainda.', ephemeral: true });
+        return interaction.reply({ content: '💔 Nenhuma curtida ainda.',flags: 1 << 6 });
       }
 
       const likesList = likes.map(userId => `<@${userId}>`).join('\n');
@@ -7191,10 +7192,10 @@ Selecione uma área para acessar suas funções específicas:
         .setColor('#ff69b4')
         .setTimestamp();
 
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed],flags: 1 << 6 });
     } catch (error) {
       console.error('Erro ao buscar likes:', error);
-      await interaction.reply({ content: '❌ Erro ao buscar curtidas.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao buscar curtidas.',flags: 1 << 6 });
     }
   }
 
@@ -7204,7 +7205,7 @@ Selecione uma área para acessar suas funções específicas:
     try {
       const post = await getPost(postId);
       if (!post) {
-        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+        return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
       }
 
       const modal = new ModalBuilder()
@@ -7225,7 +7226,7 @@ Selecione uma área para acessar suas funções específicas:
       await interaction.showModal(modal);
     } catch (error) {
       console.error('Erro ao abrir modal de comentário:', error);
-      await interaction.reply({ content: '❌ Erro ao abrir comentário.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao abrir comentário.',flags: 1 << 6 });
     }
   }
 
@@ -7235,18 +7236,18 @@ Selecione uma área para acessar suas funções específicas:
     try {
       const post = await getPost(postId);
       if (!post) {
-        return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+        return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
       }
 
       const settings = await getPostPrivacy(postId);
       if (settings.comments_private) {
-        return interaction.reply({ content: '🔒 A lista de comentários desta postagem foi privada pelo autor.', ephemeral: true });
+        return interaction.reply({ content: '🔒 A lista de comentários desta postagem foi privada pelo autor.',flags: 1 << 6 });
       }
 
       const comments = await getPostComments(postId);
 
       if (comments.length === 0) {
-        return interaction.reply({ content: '💬 Nenhum comentário ainda.', ephemeral: true });
+        return interaction.reply({ content: '💬 Nenhum comentário ainda.',flags: 1 << 6 });
       }
 
       const commentsList = comments.map((comment, index) => {
@@ -7263,10 +7264,10 @@ Selecione uma área para acessar suas funções específicas:
         .setColor('#4169e1')
         .setTimestamp();
 
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed],flags: 1 << 6 });
     } catch (error) {
       console.error('Erro ao buscar comentários:', error);
-      await interaction.reply({ content: '❌ Erro ao buscar comentários.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao buscar comentários.',flags: 1 << 6 });
     }
   }
 
@@ -7274,13 +7275,13 @@ Selecione uma área para acessar suas funções específicas:
     const postId = customId.replace('delete_post_', '');
 
     if (!postAuthors.has(postId)) {
-      return interaction.reply({ content: '❌ Post não encontrado.', ephemeral: true });
+      return interaction.reply({ content: '❌ Post não encontrado.',flags: 1 << 6 });
     }
 
     const authorId = postAuthors.get(postId);
 
     if (interaction.user.id !== authorId) {
-      return interaction.reply({ content: '❌ Apenas o autor do post pode deletá-lo.', ephemeral: true });
+      return interaction.reply({ content: '❌ Apenas o autor do post pode deletá-lo.',flags: 1 << 6 });
     }
 
     // Buscar a mensagem original do post no canal
@@ -7317,10 +7318,10 @@ Selecione uma área para acessar suas funções específicas:
       // Salvar no database
       saveDatabase();
 
-      await interaction.reply({ content: '🗑️ Post deletado com sucesso!', ephemeral: true });
+      await interaction.reply({ content: '🗑️ Post deletado com sucesso!',flags: 1 << 6 });
     } catch (error) {
       console.error('Erro ao deletar post:', error);
-      await interaction.reply({ content: '❌ Erro ao deletar o post.', ephemeral: true });
+      await interaction.reply({ content: '❌ Erro ao deletar o post.',flags: 1 << 6 });
     }
   }
 });
@@ -7680,7 +7681,8 @@ async function processFile(attachment, type, extraData = null) {
       }
 
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
       const input = `in_${nomeBase}.gif`;
       const output = `out_${nomeBase}.gif`;
       fs.writeFileSync(input, buffer);
@@ -7712,7 +7714,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'stretch-image': {
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       // Verificar se extraData contém os dados de stretch-image
       const stretchData = extraData || {};
@@ -7750,7 +7753,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'discord-banner': {
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
 
@@ -7844,7 +7848,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'format-convert': {
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       // Verificar se extraData contém os dados de format-convert
       const formatData = extraData || {};
@@ -7915,7 +7920,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'color-extractor': {
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       // Usar sharp para obter estatísticas da imagem
       const { dominant } = await sharp(buffer).stats();
@@ -8063,7 +8069,8 @@ async function processFile(attachment, type, extraData = null) {
         .replace('{data}', new Date().toISOString().slice(0, 10));
 
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       return { 
         buffer: buffer, 
@@ -8074,7 +8081,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'crop-image': {
       const response = await fetch(attachment.url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
 
       const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
 
@@ -8179,7 +8187,8 @@ async function processFile(attachment, type, extraData = null) {
       // Se for imagem, otimizar
       else {
         const response = await fetch(url);
-        const buffer = await response.buffer();
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
 
         const optimized = await sharp(buffer)
           .resize(800, 800, { 
@@ -8199,7 +8208,8 @@ async function processFile(attachment, type, extraData = null) {
 
     case 'preview-file': {
       const response = await fetch(url);
-      const buffer = await response.buffer();
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
       const extension = attachment.name.split('.').pop().toLowerCase();
 
       // Retornar arquivo original com informações
