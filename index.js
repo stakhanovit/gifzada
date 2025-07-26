@@ -27,6 +27,7 @@ const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 require('dotenv').config();
 
 // Configuração do PostgreSQL
@@ -123,6 +124,17 @@ async function initializeDatabase() {
         comment_count INTEGER DEFAULT 0,
         FOREIGN KEY (post_id) REFERENCES instagram_posts(post_id) ON DELETE CASCADE,
         PRIMARY KEY(post_id, user_id)
+      )
+    `);
+
+    // Criar tabela de curtidas do Twitter
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS twitter_likes (
+        id SERIAL PRIMARY KEY,
+        post_id VARCHAR(50) NOT NULL,
+        user_id VARCHAR(20) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(post_id, user_id)
       )
     `);
 
@@ -552,6 +564,52 @@ async function getAllPostsStats() {
   }
 }
 
+// Funções para gerenciar curtidas do Twitter no PostgreSQL
+
+// Função para adicionar/remover curtida do Twitter
+async function toggleTwitterLike(postId, userId) {
+  try {
+    // Verificar se já existe curtida
+    const existingLike = await pgClient.query(
+      'SELECT id FROM twitter_likes WHERE post_id = $1 AND user_id = $2',
+      [postId, userId]
+    );
+
+    if (existingLike.rows.length > 0) {
+      // Remover curtida
+      await pgClient.query(
+        'DELETE FROM twitter_likes WHERE post_id = $1 AND user_id = $2',
+        [postId, userId]
+      );
+      return { action: 'removed' };
+    } else {
+      // Adicionar curtida
+      await pgClient.query(
+        'INSERT INTO twitter_likes (post_id, user_id) VALUES ($1, $2)',
+        [postId, userId]
+      );
+      return { action: 'added' };
+    }
+  } catch (error) {
+    console.error('Erro ao toggle curtida Twitter:', error);
+    throw error;
+  }
+}
+
+// Função para contar curtidas do Twitter
+async function countTwitterLikes(postId) {
+  try {
+    const result = await pgClient.query(
+      'SELECT COUNT(*) as count FROM twitter_likes WHERE post_id = $1',
+      [postId]
+    );
+    return parseInt(result.rows[0].count);
+  } catch (error) {
+    console.error('Erro ao contar curtidas Twitter:', error);
+    return 0;
+  }
+}
+
 // Maps temporários para compatibilidade (serão removidos gradualmente)
 const postLikes = new Map();
 const postComments = new Map();
@@ -564,6 +622,164 @@ const threadInactivityTimers = new Map(); // threadId -> { firstTimer, secondTim
 const threadWarningMessages = new Map(); // threadId -> messageId
 
 console.log('Sistema de posts PostgreSQL inicializado');
+
+// Função para criar postagem no estilo Twitter
+async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro = false) {
+  const canvas = createCanvas(600, 400);
+  const ctx = canvas.getContext('2d');
+
+  // Fundo baseado no modo
+  ctx.fillStyle = modoEscuro ? '#15202b' : '#ffffff';
+  ctx.fillRect(0, 0, 600, 400);
+
+  // Borda sutil
+  ctx.strokeStyle = '#e1e8ed';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0, 0, 600, 400);
+
+  try {
+    let avatarUrl, displayName;
+    
+    if (anonimo) {
+      // Usuário anônimo
+      avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
+      displayName = 'Usuário Anônimo';
+    } else {
+      // Usuário real
+      avatarUrl = autor.displayAvatarURL({ extension: 'png', size: 128 });
+      displayName = autor.displayName || autor.username;
+    }
+
+    // Carregar avatar
+    const avatar = await loadImage(avatarUrl);
+    
+    // Desenhar avatar (circular)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(50, 50, 25, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(avatar, 25, 25, 50, 50);
+    ctx.restore();
+
+    // Nome do usuário
+    ctx.fillStyle = modoEscuro ? '#ffffff' : '#14171a';
+    ctx.font = 'bold 16px Arial';
+    ctx.fillText(displayName, 90, 45);
+
+    // Handle do usuário (se não for anônimo)
+    if (!anonimo) {
+      ctx.fillStyle = modoEscuro ? '#8899a6' : '#657786';
+      ctx.font = '14px Arial';
+      ctx.fillText(`@${autor.username}`, 90, 65);
+    }
+
+    // Texto da postagem
+    ctx.fillStyle = modoEscuro ? '#ffffff' : '#14171a';
+    ctx.font = '18px Arial';
+    
+    // Quebrar texto em linhas
+    const linhas = quebrarTexto(ctx, texto, 480);
+    let yPos = 120;
+    
+    linhas.forEach(linha => {
+      ctx.fillText(linha, 30, yPos);
+      yPos += 25;
+    });
+
+    // Mencionar usuário (se houver)
+    if (mencionar) {
+      yPos += 20;
+      
+      // Linha de separação
+      ctx.strokeStyle = modoEscuro ? '#38444d' : '#e1e8ed';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(30, yPos);
+      ctx.lineTo(570, yPos);
+      ctx.stroke();
+      
+      yPos += 30;
+      
+      try {
+        // Avatar do mencionado
+        const mencionadoAvatar = await loadImage(mencionar.displayAvatarURL({ extension: 'png', size: 64 }));
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(50, yPos + 15, 15, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(mencionadoAvatar, 35, yPos, 30, 30);
+        ctx.restore();
+        
+        // Nome do mencionado
+        ctx.fillStyle = '#1da1f2';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText(`@${mencionar.displayName || mencionar.username}`, 80, yPos + 20);
+      } catch (error) {
+        console.error('Erro ao carregar avatar do mencionado:', error);
+        // Fallback sem avatar
+        ctx.fillStyle = '#1da1f2';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText(`@${mencionar.displayName || mencionar.username}`, 30, yPos + 20);
+      }
+    }
+
+    // Linha inferior
+    const bottomY = 350;
+    ctx.strokeStyle = modoEscuro ? '#38444d' : '#e1e8ed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(30, bottomY);
+    ctx.lineTo(570, bottomY);
+    ctx.stroke();
+
+    // Timestamp com fuso horário de Brasília
+    const agora = new Date();
+    const timestamp = agora.toLocaleString('pt-BR', { 
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric',
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    ctx.fillStyle = modoEscuro ? '#8899a6' : '#657786';
+    ctx.font = '12px Arial';
+    ctx.fillText(timestamp, 450, bottomY + 25);
+
+    return canvas.toBuffer('image/png');
+
+  } catch (error) {
+    console.error('Erro ao criar canvas da postagem:', error);
+    throw error;
+  }
+}
+
+// Função auxiliar para quebrar texto em linhas
+function quebrarTexto(ctx, texto, larguraMaxima) {
+  const palavras = texto.split(' ');
+  const linhas = [];
+  let linhaAtual = '';
+
+  palavras.forEach(palavra => {
+    const testeLinhaAtual = linhaAtual + (linhaAtual ? ' ' : '') + palavra;
+    const largura = ctx.measureText(testeLinhaAtual).width;
+    
+    if (largura > larguraMaxima && linhaAtual) {
+      linhas.push(linhaAtual);
+      linhaAtual = palavra;
+    } else {
+      linhaAtual = testeLinhaAtual;
+    }
+  });
+  
+  if (linhaAtual) {
+    linhas.push(linhaAtual);
+  }
+  
+  return linhas;
+}
 
 // Funções para sistema de inatividade nas threads do conversor
 function startInactivityTimer(threadId, userId) {
@@ -724,6 +940,36 @@ client.once('ready', async () => {
           type: 6, // USER
           description: 'O usuário a ser recrutado como postador',
           required: true,
+        },
+      ],
+    },
+    {
+      name: 'postar',
+      description: 'Cria uma postagem no estilo Twitter',
+      options: [
+        {
+          name: 'texto',
+          type: 3, // STRING
+          description: 'O texto da postagem',
+          required: true,
+        },
+        {
+          name: 'mencionar',
+          type: 6, // USER
+          description: 'Usuário para mencionar na postagem',
+          required: false,
+        },
+        {
+          name: 'anonimo',
+          type: 5, // BOOLEAN
+          description: 'Postar como anônimo (oculta quem fez a postagem)',
+          required: false,
+        },
+        {
+          name: 'modo_escuro',
+          type: 5, // BOOLEAN
+          description: 'Usar fundo escuro na postagem',
+          required: false,
         },
       ],
     },
@@ -1341,6 +1587,17 @@ client.on('messageCreate', async message => {
 
       console.log(`Post criado: ${postId} por ${message.author.username} - Mensagem: ${webhookMessage.id}`);
 
+      // Atualizar o post no banco com o ID da mensagem
+      try {
+        await pgClient.query(
+          'UPDATE instagram_posts SET message_id = $1 WHERE post_id = $2',
+          [webhookMessage.id, postId]
+        );
+        console.log(`Post ${postId} atualizado com message_id: ${webhookMessage.id}`);
+      } catch (updateError) {
+        console.error('Erro ao atualizar message_id do post:', updateError);
+      }
+
       // Deletar mensagem original
       await message.delete();
     } catch (error) {
@@ -1714,6 +1971,169 @@ ${error.message}
     return;
   }
 
+  if (message.content === '!setnotify') {
+    const notifyEmbed = new EmbedBuilder()
+      .setTitle('<:d_emoji_274:1269197941751545947>┊GIFZADA - NOTIFICAÇÕES')
+      .setDescription(`
+<:1266748851050774540:1266748851050774540> Receba nossos cargos de notificações para evitar menções em excesso. Logo abaixo estão os tipos de notificações disponíveis.
+
+<:1270121894946799626:1270121894946799626> | Notificações Gerais:
+<:1269198470309220385:1269198470309220385> Esteja informado sobre nossas mudanças no servidor e possíveis sorteios.
+
+<:1270121894946799626:1270121894946799626> | Notificações de Pedidos:
+<:1269198470309220385:1269198470309220385> Saiba quando abrirem nossos pedidos; mencionaremos sempre que os chats estiverem disponíveis.
+
+<:emoji_272:1398746634602549248> | Notificações Gerais.
+<:emoji_272:1398746634602549248> | Notificações: Pedidos-Gif.
+<:emoji_272:1398746634602549248> | Notificações: Pedidos-Icon.
+`)
+      .setColor('#9c41ff')
+      .setThumbnail(message.guild.iconURL({ dynamic: true, size: 512 }))
+      .setImage('attachment://banner.png')
+      .setTimestamp();
+
+    const notifyRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('notify_geral')
+        .setEmoji('<:emoji_272:1398746634602549248>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('notify_pedidos_gif')
+        .setEmoji('<:emoji_272:1398746634602549248>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('notify_pedidos_icon')
+        .setEmoji('<:emoji_272:1398746634602549248>')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const bannerAttachment = new AttachmentBuilder('./banner.png', { name: 'banner.png' });
+    
+    await message.channel.send({ 
+      embeds: [notifyEmbed], 
+      components: [notifyRow],
+      files: [bannerAttachment]
+    });
+  }
+
+  if (message.content === '!setnickcolor') {
+    const nickColorEmbed = new EmbedBuilder()
+      .setTitle('<:d_emoji_274:1269197941751545947> ┊GIFZADA - NICK COLOR')
+      .setDescription(`
+<:1269198470309220385:1269198470309220385> Cansou da cor do seu apelido no servidor? Deixe seu perfil em nosso servidor mais colorido seguindo as instruções abaixo!
+
+<:d_brush:1398752562072522843> | Para receber a cor <@&1065441794684362752>
+<:y_brush:1398752431902298152> | Para receber a cor <@&1065441793304449074>
+<:o_brush:1398752246338027530> | Para receber a cor <@&1065441795783282898>
+<:e_brush:1398751907853631539> | Para receber a cor <@&1065441790972399646>
+<:f_brush:1398752104285343918> | Para receber a cor <@&1236336928807321663> 
+
+1. Clique no botão correspondente à cor desejada;
+2. Após isso, seu apelido já terá a cor selecionada.
+3. Caso queira retirar o cargo de cor, basta clicar no botão novamente.
+`)
+      .setColor('#9c41ff')
+      .setThumbnail(message.guild.iconURL({ dynamic: true, size: 512 }))
+      .setImage('attachment://nickcolor.png')
+      .setTimestamp();
+
+    const nickColorRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('nickcolor_d')
+        .setEmoji('<:d_brush:1398752562072522843>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('nickcolor_y')
+        .setEmoji('<:y_brush:1398752431902298152>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('nickcolor_o')
+        .setEmoji('<:o_brush:1398752246338027530>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('nickcolor_e')
+        .setEmoji('<:e_brush:1398751907853631539>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId('nickcolor_f')
+        .setEmoji('<:f_brush:1398752104285343918>')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const nickColorAttachment = new AttachmentBuilder('./nickcolor.png', { name: 'nickcolor.png' });
+
+    await message.channel.send({ 
+      embeds: [nickColorEmbed], 
+      components: [nickColorRow],
+      files: [nickColorAttachment]
+    });
+  }
+
+  if (message.content === '!setnickboostercolor') {
+    const nickBoosterColorEmbed = new EmbedBuilder()
+      .setTitle('<:d_emoji_274:1269197941751545947> ┊GIFZADA - NICK COLOR BOOSTER')
+      .setDescription(`
+<:1269198470309220385:1269198470309220385> Cansou da cor do seu apelido no servidor? Deixe seu perfil em nosso servidor mais colorido seguindo as instruções abaixo!
+
+**CORES BOOSTER DISPONÍVEIS:**
+
+ **PASTÉIS**
+<:p_brush:1398758670761988157> - <@&1298119975453593600>
+<:p_brush1:1398758933182550067> - <@&1298119805936734248>
+<:p_brush2:1398759046445535393> - <@&1298120196908912660>
+<:p_brush3:1398759435345858561> - <@&1298120108719345674>
+<:p_brush4:1398759757027999744> - <@&1298120431605121024>
+
+ **NEON**
+<:n_brush:1398759884815863950> - <@&1398736295278153901>
+<:n_brush1:1398759976343961712> - <@&1398736303926804530>
+<:n_brush2:1398760077686472815> - <@&1398736311032090706>
+
+ **METÁLICAS**
+<:m_brush:1398760429248970753> - <@&1398736652163219557>
+<:m_brush1:1398760537738969198> - <@&1398736647537033318>
+<:m_brush2:1398760653413679167> - <@&1398736657041068042>
+
+1. Selecione a categoria de cor desejada no menu abaixo;
+2. Escolha a cor específica que deseja;
+3. Após isso, seu apelido já terá a cor selecionada.
+`)
+      .setColor('#9c41ff')
+      .setThumbnail(message.guild.iconURL({ dynamic: true, size: 512 }))
+      .setImage('attachment://nickcolor.png')
+      .setTimestamp();
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('booster_color_category')
+      .setPlaceholder(' Escolha uma categoria de cor')
+      .addOptions([
+        {
+          label: 'Pastéis',
+          description: 'Cores pastéis suaves e delicadas',
+          value: 'pasteis',
+        },
+        {
+          label: 'Neon',
+          description: 'Cores neon vibrantes e chamativas',
+          value: 'neon',
+        },
+        {
+          label: 'Metálicas',
+          description: 'Cores metálicas elegantes',
+          value: 'metalicas',
+        }
+      ]);
+
+    const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+    const nickColorAttachment = new AttachmentBuilder('./nickcolor.png', { name: 'nickcolor.png' });
+
+    await message.channel.send({ 
+      embeds: [nickBoosterColorEmbed], 
+      components: [selectRow],
+      files: [nickColorAttachment]
+    });
+  }
+
   if (message.content === '!painel') {
     // Verificar se o usuário tem o cargo de staff
     const staffRoleId = '1230677503719374990';
@@ -2032,6 +2452,49 @@ client.on('interactionCreate', async interaction => {
         components: [confirmRow],
         ephemeral: true
       });
+    }
+
+    if (commandName === 'postar') {
+      const texto = options.getString('texto');
+      const mencionar = options.getUser('mencionar');
+      const anonimo = options.getBoolean('anonimo') || false;
+      const modoEscuro = options.getBoolean('modo_escuro') || false;
+
+      try {
+        // Defer a resposta para ter mais tempo de processamento
+        await interaction.deferReply();
+
+        // Criar a imagem da postagem
+        const imagemBuffer = await criarPostagemTwitter(interaction.user, texto, mencionar, anonimo, modoEscuro);
+        
+        // Criar attachment
+        const attachment = new AttachmentBuilder(imagemBuffer, { name: 'postagem.png' });
+
+        // Enviar a postagem no canal
+        await interaction.channel.send({
+          files: [attachment]
+        });
+
+        // Não enviar resposta ao usuário (fazer dismiss silencioso)
+        await interaction.editReply({
+          content: '✅ Postagem enviada!',
+        });
+
+        // Deletar a resposta após 500ms
+        setTimeout(async () => {
+          try {
+            await interaction.deleteReply();
+          } catch (error) {
+            console.log('Resposta já foi deletada ou expirou');
+          }
+        }, 500);
+
+      } catch (error) {
+        console.error('Erro ao criar postagem:', error);
+        await interaction.editReply({
+          content: '❌ Erro ao criar a postagem. Tente novamente.',
+        });
+      }
     }
     return;
   }
@@ -3305,6 +3768,119 @@ ${detailText}
       if (selectedType) {
         await handleConversionOption(interaction, selectedType);
       }
+    }
+
+    // Handler para Select Menu de cores booster
+    if (interaction.customId === 'booster_color_category') {
+      const selectedCategory = interaction.values[0];
+
+      let categoryEmbed;
+      let colorButtons;
+
+      if (selectedCategory === 'pasteis') {
+        categoryEmbed = new EmbedBuilder()
+          .setTitle(' CORES PASTÉIS')
+          .setDescription(`
+Selecione uma das cores pastéis abaixo:
+
+<:p_brush:1398758670761988157> - <@&1298119975453593600>
+<:p_brush1:1398758933182550067> - <@&1298119805936734248>
+<:p_brush2:1398759046445535393> - <@&1298120196908912660>
+<:p_brush3:1398759435345858561> - <@&1298120108719345674>
+<:p_brush4:1398759757027999744> - <@&1298120431605121024>
+
+Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
+`)
+          .setColor('#FFB6C1')
+          .setTimestamp();
+
+        colorButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('booster_pastel_1')
+            .setEmoji('<:p_brush:1398758670761988157>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_pastel_2')
+            .setEmoji('<:p_brush1:1398758933182550067>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_pastel_3')
+            .setEmoji('<:p_brush2:1398759046445535393>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_pastel_4')
+            .setEmoji('<:p_brush3:1398759435345858561>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_pastel_5')
+            .setEmoji('<:p_brush4:1398759757027999744>')
+            .setStyle(ButtonStyle.Secondary)
+        );
+      } else if (selectedCategory === 'neon') {
+        categoryEmbed = new EmbedBuilder()
+          .setTitle(' CORES NEON')
+          .setDescription(`
+Selecione uma das cores neon abaixo:
+
+<:n_brush:1398759884815863950> - <@&1398736295278153901>
+<:n_brush1:1398759976343961712> - <@&1398736303926804530>
+<:n_brush2:1398760077686472815> - <@&1398736311032090706>
+
+Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
+`)
+          .setColor('#00FF00')
+          .setTimestamp();
+
+        colorButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('booster_neon_1')
+            .setEmoji('<:n_brush:1398759884815863950>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_neon_2')
+            .setEmoji('<:n_brush1:1398759976343961712>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_neon_3')
+            .setEmoji('<:n_brush2:1398760077686472815>')
+            .setStyle(ButtonStyle.Secondary)
+        );
+      } else if (selectedCategory === 'metalicas') {
+        categoryEmbed = new EmbedBuilder()
+          .setTitle(' CORES METÁLICAS')
+          .setDescription(`
+Selecione uma das cores metálicas abaixo:
+
+<:m_brush:1398760429248970753> - <@&1398736652163219557>
+<:m_brush1:1398760537738969198> - <@&1398736647537033318>
+<:m_brush2:1398760653413679167> - <@&1398736657041068042>
+
+Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
+`)
+          .setColor('#C0C0C0')
+          .setTimestamp();
+
+        colorButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('booster_metalica_1')
+            .setEmoji('<:m_brush:1398760429248970753>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_metalica_2')
+            .setEmoji('<:m_brush1:1398760537738969198>')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('booster_metalica_3')
+            .setEmoji('<:m_brush2:1398760653413679167>')
+            .setStyle(ButtonStyle.Secondary)
+        );
+      }
+
+      await interaction.reply({ 
+        embeds: [categoryEmbed], 
+        components: [colorButtons], 
+        ephemeral: true 
+      });
     }
     return;
   }
@@ -5818,6 +6394,470 @@ Selecione uma área para acessar suas funções específicas:
     await interaction.showModal(modal);
   }
 
+  // Handlers para botões de notificação
+  if (customId === 'notify_geral') {
+    const roleId = '1236336909513654385';
+    const member = interaction.member;
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações Gerais**!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações Gerais**!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'notify_pedidos_gif') {
+    const roleId = '1065441789605068841';
+    const member = interaction.member;
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações: Pedidos-gif**!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações: Pedidos-gif**!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'notify_pedidos_icon') {
+    const roleId = '1236336958452797523';
+    const member = interaction.member;
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você removeu o cargo de **Notificações: Pedidos-Icon**!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:emoji_272:1398746634602549248> Você recebeu o cargo de **Notificações: Pedidos-Icon**!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  // Handlers para botões de cor de nick
+  if (customId === 'nickcolor_d') {
+    const roleId = '1065441794684362752';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores antes de adicionar a nova
+    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+    await member.roles.remove(colorRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:d_brush:1398752562072522843> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:d_brush:1398752562072522843> Você recebeu a cor **Roxa** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'nickcolor_y') {
+    const roleId = '1065441793304449074';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores antes de adicionar a nova
+    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+    await member.roles.remove(colorRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:y_brush:1398752431902298152> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:y_brush:1398752431902298152> Você recebeu a cor **Azul** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'nickcolor_o') {
+    const roleId = '1065441795783282898';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores antes de adicionar a nova
+    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+    await member.roles.remove(colorRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:o_brush:1398752246338027530> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:o_brush:1398752246338027530> Você recebeu a cor **Verde** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'nickcolor_e') {
+    const roleId = '1065441790972399646';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores antes de adicionar a nova
+    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+    await member.roles.remove(colorRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:e_brush:1398751907853631539> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:e_brush:1398751907853631539> Você recebeu a cor **Amarela** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'nickcolor_f') {
+    const roleId = '1236336928807321663';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores antes de adicionar a nova
+    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+    await member.roles.remove(colorRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:f_brush:1398752104285343918> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:f_brush:1398752104285343918> Você recebeu a cor **Laranja** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  // Handlers para cores booster - Pastéis
+  if (customId === 'booster_pastel_1') {
+    const roleId = '1298119975453593600';
+    const member = interaction.member;
+    
+    // Remover todas as outras cores booster antes de adicionar a nova
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush:1398758670761988157> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush:1398758670761988157> Você recebeu a cor **Pastel** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_pastel_2') {
+    const roleId = '1298119805936734248';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush1:1398758933182550067> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush1:1398758933182550067> Você recebeu a cor **Pastel** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_pastel_3') {
+    const roleId = '1298120196908912660';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush2:1398759046445535393> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush2:1398759046445535393> Você recebeu a cor **Pastel** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_pastel_4') {
+    const roleId = '1298120108719345674';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush3:1398759435345858561> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush3:1398759435345858561> Você recebeu a cor **Pastel** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_pastel_5') {
+    const roleId = '1298120431605121024';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush4:1398759757027999744> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:p_brush4:1398759757027999744> Você recebeu a cor **Pastel** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  // Handlers para cores booster - Neon
+  if (customId === 'booster_neon_1') {
+    const roleId = '1398736295278153901';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush:1398759884815863950> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush:1398759884815863950> Você recebeu a cor **Neon** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_neon_2') {
+    const roleId = '1398736303926804530';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush1:1398759976343961712> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush1:1398759976343961712> Você recebeu a cor **Neon** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_neon_3') {
+    const roleId = '1398736311032090706';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush2:1398760077686472815> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:n_brush2:1398760077686472815> Você recebeu a cor **Neon** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  // Handlers para cores booster - Metálicas
+  if (customId === 'booster_metalica_1') {
+    const roleId = '1398736652163219557';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush:1398760429248970753> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush:1398760429248970753> Você recebeu a cor **Metálica** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_metalica_2') {
+    const roleId = '1398736647537033318';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush1:1398760537738969198> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush1:1398760537738969198> Você recebeu a cor **Metálica** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
+  if (customId === 'booster_metalica_3') {
+    const roleId = '1398736657041068042';
+    const member = interaction.member;
+    
+    const boosterRoles = [
+      '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
+      '1398736295278153901', '1398736303926804530', '1398736311032090706',
+      '1398736652163219557', '1398736647537033318', '1398736657041068042'
+    ];
+    await member.roles.remove(boosterRoles.filter(id => id !== roleId));
+    
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush2:1398760653413679167> Você removeu a cor do seu nick!', 
+        ephemeral: true 
+      });
+    } else {
+      await member.roles.add(roleId);
+      await interaction.reply({ 
+        content: '<:m_brush2:1398760653413679167> Você recebeu a cor **Metálica** no seu nick!', 
+        ephemeral: true 
+      });
+    }
+  }
+
   // Handler para deletar comentário (autor)
   if (customId.startsWith('delete_comment_')) {
     const postId = customId.replace('delete_comment_', '');
@@ -5911,10 +6951,24 @@ Selecione uma área para acessar suas funções específicas:
     const userId = interaction.user.id;
 
     try {
-      // Verificar se o post existe
-      const post = await getPost(postId);
+      // Verificar se o post existe, se não existir, tentar criar
+      let post = await getPost(postId);
       if (!post) {
-        return interaction.reply({ content: '❌ Post não encontrado. Tente recarregar a página.', ephemeral: true });
+        try {
+          // Tentar extrair o autor do postId (formato: post_timestamp_authorId)
+          const postIdParts = postId.split('_');
+          if (postIdParts.length >= 3) {
+            const authorId = postIdParts[2];
+            await createPost(postId, authorId);
+            console.log(`Post ${postId} criado automaticamente no banco`);
+          } else {
+            console.error('Formato de postId inválido:', postId);
+            return interaction.reply({ content: '❌ Post não encontrado. ID do post inválido.', ephemeral: true });
+          }
+        } catch (createError) {
+          console.error('Erro ao criar post automaticamente:', createError);
+          return interaction.reply({ content: '❌ Erro ao processar like. Post não encontrado no sistema.', ephemeral: true });
+        }
       }
 
       // Toggle like no database
@@ -5932,6 +6986,12 @@ Selecione uma área para acessar suas funções específicas:
 
     // Buscar contagem atual de likes
     const likeCount = await countPostLikes(postId);
+
+    // Verificar se a mensagem e os componentes existem
+    if (!interaction.message || !interaction.message.components || interaction.message.components.length < 2) {
+      console.log('Mensagem ou componentes não disponíveis para atualização');
+      return;
+    }
 
     // Atualizar botão com novo número de likes
     const currentRow1 = interaction.message.components[0];
@@ -6005,6 +7065,8 @@ Selecione uma área para acessar suas funções específicas:
       }
     }
   }
+
+  
 
   if (customId.startsWith('show_likes_')) {
     const postId = customId.replace('show_likes_', '');
