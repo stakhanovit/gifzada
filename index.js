@@ -51,7 +51,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS active_threads (
         user_id VARCHAR(20) PRIMARY KEY,
         thread_id VARCHAR(20) NOT NULL,
-        thread_type VARCHAR(20) NOT NULL,
+        thread_type VARCHAR(100) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -3887,6 +3887,12 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
 
   if (!interaction.isButton()) return;
 
+  // Verificar se a interação ainda é válida
+  if (interaction.replied || interaction.deferred) {
+    console.log('Interação já foi processada, ignorando');
+    return;
+  }
+
   const { customId, user, channel } = interaction;
 
   if (customId === 'abrir_conversor') {
@@ -6454,117 +6460,157 @@ Selecione uma área para acessar suas funções específicas:
 
   // Handlers para botões de cor de nick
   if (customId === 'nickcolor_d') {
-    const roleId = '1065441794684362752';
-    const member = interaction.member;
-    
-    // Remover todas as outras cores antes de adicionar a nova
-    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
-    await member.roles.remove(colorRoles.filter(id => id !== roleId));
-    
-    if (member.roles.cache.has(roleId)) {
-      await member.roles.remove(roleId);
-      await interaction.reply({ 
-        content: '<:d_brush:1398752562072522843> Você removeu a cor do seu nick!', 
-        ephemeral: true 
-      });
-    } else {
-      await member.roles.add(roleId);
-      await interaction.reply({ 
-        content: '<:d_brush:1398752562072522843> Você recebeu a cor **Roxa** no seu nick!', 
-        ephemeral: true 
-      });
+    // Verificar se a interação ainda é válida
+    if (interaction.replied || interaction.deferred) {
+      console.log('Interação já foi respondida, ignorando');
+      return;
+    }
+
+    try {
+      const roleId = '1065441794684362752';
+      const member = interaction.member;
+      
+      // Remover todas as outras cores antes de adicionar a nova
+      const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+      await member.roles.remove(colorRoles.filter(id => id !== roleId));
+      
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId);
+        await interaction.reply({ 
+          content: '<:d_brush:1398752562072522843> Você removeu a cor do seu nick!', 
+          ephemeral: true 
+        });
+      } else {
+        await member.roles.add(roleId);
+        await interaction.reply({ 
+          content: '<:d_brush:1398752562072522843> Você recebeu a cor **Roxa** no seu nick!', 
+          ephemeral: true 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao processar cor de nick:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        try {
+          await interaction.reply({ 
+            content: '❌ Erro ao alterar cor do nick. Tente novamente.', 
+            ephemeral: true 
+          });
+        } catch (replyError) {
+          console.error('Erro ao responder interação:', replyError);
+        }
+      }
     }
   }
 
   if (customId === 'nickcolor_y') {
-    const roleId = '1065441793304449074';
-    const member = interaction.member;
+    if (interaction.replied || interaction.deferred) return;
     
-    // Remover todas as outras cores antes de adicionar a nova
-    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
-    await member.roles.remove(colorRoles.filter(id => id !== roleId));
-    
-    if (member.roles.cache.has(roleId)) {
-      await member.roles.remove(roleId);
-      await interaction.reply({ 
-        content: '<:y_brush:1398752431902298152> Você removeu a cor do seu nick!', 
-        ephemeral: true 
-      });
-    } else {
-      await member.roles.add(roleId);
-      await interaction.reply({ 
-        content: '<:y_brush:1398752431902298152> Você recebeu a cor **Azul** no seu nick!', 
-        ephemeral: true 
-      });
+    try {
+      const roleId = '1065441793304449074';
+      const member = interaction.member;
+      
+      const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+      await member.roles.remove(colorRoles.filter(id => id !== roleId));
+      
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId);
+        await interaction.reply({ 
+          content: '<:y_brush:1398752431902298152> Você removeu a cor do seu nick!', 
+          ephemeral: true 
+        });
+      } else {
+        await member.roles.add(roleId);
+        await interaction.reply({ 
+          content: '<:y_brush:1398752431902298152> Você recebeu a cor **Azul** no seu nick!', 
+          ephemeral: true 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao processar cor de nick:', error);
     }
   }
 
   if (customId === 'nickcolor_o') {
-    const roleId = '1065441795783282898';
-    const member = interaction.member;
+    if (interaction.replied || interaction.deferred) return;
     
-    // Remover todas as outras cores antes de adicionar a nova
-    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
-    await member.roles.remove(colorRoles.filter(id => id !== roleId));
-    
-    if (member.roles.cache.has(roleId)) {
-      await member.roles.remove(roleId);
-      await interaction.reply({ 
-        content: '<:o_brush:1398752246338027530> Você removeu a cor do seu nick!', 
-        ephemeral: true 
-      });
-    } else {
-      await member.roles.add(roleId);
-      await interaction.reply({ 
-        content: '<:o_brush:1398752246338027530> Você recebeu a cor **Verde** no seu nick!', 
-        ephemeral: true 
-      });
+    try {
+      const roleId = '1065441795783282898';
+      const member = interaction.member;
+      
+      const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+      await member.roles.remove(colorRoles.filter(id => id !== roleId));
+      
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId);
+        await interaction.reply({ 
+          content: '<:o_brush:1398752246338027530> Você removeu a cor do seu nick!', 
+          ephemeral: true 
+        });
+      } else {
+        await member.roles.add(roleId);
+        await interaction.reply({ 
+          content: '<:o_brush:1398752246338027530> Você recebeu a cor **Verde** no seu nick!', 
+          ephemeral: true 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao processar cor de nick:', error);
     }
   }
 
   if (customId === 'nickcolor_e') {
-    const roleId = '1065441790972399646';
-    const member = interaction.member;
+    if (interaction.replied || interaction.deferred) return;
     
-    // Remover todas as outras cores antes de adicionar a nova
-    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
-    await member.roles.remove(colorRoles.filter(id => id !== roleId));
-    
-    if (member.roles.cache.has(roleId)) {
-      await member.roles.remove(roleId);
-      await interaction.reply({ 
-        content: '<:e_brush:1398751907853631539> Você removeu a cor do seu nick!', 
-        ephemeral: true 
-      });
-    } else {
-      await member.roles.add(roleId);
-      await interaction.reply({ 
-        content: '<:e_brush:1398751907853631539> Você recebeu a cor **Amarela** no seu nick!', 
-        ephemeral: true 
-      });
+    try {
+      const roleId = '1065441790972399646';
+      const member = interaction.member;
+      
+      const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+      await member.roles.remove(colorRoles.filter(id => id !== roleId));
+      
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId);
+        await interaction.reply({ 
+          content: '<:e_brush:1398751907853631539> Você removeu a cor do seu nick!', 
+          ephemeral: true 
+        });
+      } else {
+        await member.roles.add(roleId);
+        await interaction.reply({ 
+          content: '<:e_brush:1398751907853631539> Você recebeu a cor **Amarela** no seu nick!', 
+          ephemeral: true 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao processar cor de nick:', error);
     }
   }
 
   if (customId === 'nickcolor_f') {
-    const roleId = '1236336928807321663';
-    const member = interaction.member;
+    if (interaction.replied || interaction.deferred) return;
     
-    // Remover todas as outras cores antes de adicionar a nova
-    const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
-    await member.roles.remove(colorRoles.filter(id => id !== roleId));
-    
-    if (member.roles.cache.has(roleId)) {
-      await member.roles.remove(roleId);
-      await interaction.reply({ 
-        content: '<:f_brush:1398752104285343918> Você removeu a cor do seu nick!', 
-        ephemeral: true 
-      });
-    } else {
-      await member.roles.add(roleId);
-      await interaction.reply({ 
-        content: '<:f_brush:1398752104285343918> Você recebeu a cor **Laranja** no seu nick!', 
-        ephemeral: true 
-      });
+    try {
+      const roleId = '1236336928807321663';
+      const member = interaction.member;
+      
+      const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
+      await member.roles.remove(colorRoles.filter(id => id !== roleId));
+      
+      if (member.roles.cache.has(roleId)) {
+        await member.roles.remove(roleId);
+        await interaction.reply({ 
+          content: '<:f_brush:1398752104285343918> Você removeu a cor do seu nick!', 
+          ephemeral: true 
+        });
+      } else {
+        await member.roles.add(roleId);
+        await interaction.reply({ 
+          content: '<:f_brush:1398752104285343918> Você recebeu a cor **Laranja** no seu nick!', 
+          ephemeral: true 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao processar cor de nick:', error);
     }
   }
 
@@ -8312,16 +8358,23 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
   }
 }
 
-// Salvar database quando o bot desligar
+// Tratamento de erros não capturados
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+// Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('Salvando database antes de desligar...');
-  saveDatabase();
+  console.log('Bot desligando...');
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('Salvando database antes de desligar...');
-  saveDatabase();
+  console.log('Bot desligando...');
   process.exit(0);
 });
 
