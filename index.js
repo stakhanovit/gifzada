@@ -1634,19 +1634,20 @@ client.on('messageCreate', async message => {
       .setDescription(`
 <:1269199842866106458:1269199842866106458>
 
-<:1269198470309220385:1269198470309220385> Colabore com a comunidade sendo maker ou postador!
+<:1269198470309220385:1269198470309220385> Seja parte da STAFF!
 
-<:1266748851050774540:1266748851050774540> | **Qual é a função do Maker?**
-1. São os responsáveis pela entrega de GIFs, Icons, Emojis e edições;
-2. Eles compõem a nossa equipe e mantêm o servidor ativo;
-3. Tem a obrigação de subir de cargo no servidor até se tornar parte da staff!
+<:1266748851050774540:1266748851050774540> | **Por que ser STAFF?**
+Você gosta de criar, editar e movimentar a comunidade? Então esse espaço é seu!
+Nossa equipe é formada por pessoas talentosas que mantêm o servidor vivo com conteúdos como GIFs, ícones, emojis e edições únicas.
 
-<:1266748851050774540:1266748851050774540> | **Qual a função do Postador?**
-1. São responsáveis por trazer o conteúdo para o servidor sem entrega de pedidos;
-2. Caso queira ser postador, tenha em mente que se um dia queira virar maker, entrará com o cargo inicial.
+<:1266748851050774540:1266748851050774540> | **O que esperamos de você?**
+• Comprometimento com a entrega de conteúdo criativo.
+• Participação ativa na comunidade.
+• Interesse em crescer dentro da equipe e em outras áreas — todos começam de base, mas podem subir de cargo!
 
-<:1266748851050774540:1266748851050774540> | **Como faço para Migrar?**
-<:1269198470309220385:1269198470309220385> Basta fazer o formulário na opção de migração e responder às seguintes dúvidas, aceitamos migrações apenas de outros servidores de GIF's!
+<:1266748851050774540:1266748851050774540> | **Já tem experiência?**
+<:1269198470309220385:1269198470309220385> Se você já foi staff em outros servidores de GIFs ou Comunidade, pode solicitar uma migração de cargo!
+Basta preencher o formulário na aba de migração e responder às perguntas com atenção.
 `)
       .setColor('#9c41ff')
       .setImage('https://cdn.discordapp.com/attachments/1385367538409410723/1386788085664321628/APoeGPo.png?ex=685afa8c&is=6859a90c&hm=e536d88518a990b8c762f742c2a352dad67d47ffd18738addb5d689d13d01f97&')
@@ -1655,11 +1656,7 @@ client.on('messageCreate', async message => {
     const recruitmentRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('seja_maker')
-        .setLabel('Seja Maker')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId('seja_postador')
-        .setLabel('Seja Postador')
+        .setLabel('Seja Staff')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId('migracao')
@@ -4570,7 +4567,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   if (customId === 'seja_maker') {
     const modal = new ModalBuilder()
       .setCustomId('seja_maker_modal')
-      .setTitle('Seja Maker - GIFZADA');
+      .setTitle('Seja Staff - GIFZADA');
 
     const nomeInput = new TextInputBuilder()
       .setCustomId('nome')
@@ -4586,7 +4583,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
 
     const foiMakerInput = new TextInputBuilder()
       .setCustomId('foi_maker')
-      .setLabel('Já foi maker de outro servidor de GIFS?')
+      .setLabel('Já foi staff de outro servidor?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -4835,7 +4832,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
           // Extrair informações da descrição
           const nomeMatch = description.match(/\*\*Nome:\*\*\s*(.+)/);
           const idadeMatch = description.match(/\*\*Idade:\*\*\s*(.+)/);
-          const foiMakerMatch = description.match(/\*\*Já foi maker de outro servidor de GIFS\?\*\*\s*(.+)/);
+          const foiMakerMatch = description.match(/\*\*Já foi staff de outro servidor\?\*\*\s*(.+)/);
           const objetivoMatch = description.match(/\*\*Objetivo a alcançar:\*\*\s*(.+)/);
 
           const nome = nomeMatch ? nomeMatch[1].trim() : 'Não informado';
@@ -4850,13 +4847,13 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
             const apadrinhamentoEmbed = new EmbedBuilder()
               .setTitle('<:1266777381188931726:1266777381188931726> | GIFZADA - APADRINHAMENTO')
               .setDescription(`
-╭ ┈<:d_arrow:1366582051507273728> Seu trabalho agora é apadrinhar esse maker, fazendo com que ele saiba de todas as informações que precisa saber.
+╭ ┈<:d_arrow:1366582051507273728> Seu trabalho agora é apadrinhar esse staff, fazendo com que ele saiba de todas as informações que precisa saber.
 
 **Nome:**
 ${nome}
 **Idade:**
 ${idade}
-**Já foi maker de outro servidor de GIFS?**
+**Já foi maker de outro servidor?**
 ${foiMaker}
 **Objetivo a alcançar:**
 ${objetivo}
