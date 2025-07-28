@@ -2563,7 +2563,6 @@ client.on('interactionCreate', async interaction => {
 <:1266748851050774540:1266748851050774540> | Como staff, sua principal responsabilidade é garantir que o servidor funcione de forma organizada, acolhedora e ativa para todos os membros!
 
 <:1269198470309220385:1269198470309220385> Sua missão é colaborar com a equipe, ajudar nas demandas da comunidade e contribuir para o crescimento do servidor com dedicação e comprometimento.
-`)
 
 
 **Nome:**
