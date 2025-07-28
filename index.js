@@ -141,6 +141,40 @@ async function initializeDatabase() {
       )
     `);
 
+    // Criar tabela de pontos dos usuários
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS user_points (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(20) NOT NULL UNIQUE,
+        username VARCHAR(100) NOT NULL,
+        total_points INTEGER DEFAULT 0,
+        entregas_count INTEGER DEFAULT 0,
+        vip_count INTEGER DEFAULT 0,
+        edicao_count INTEGER DEFAULT 0,
+        encontrar_count INTEGER DEFAULT 0,
+        recrutamento_count INTEGER DEFAULT 0,
+        verificacao_count INTEGER DEFAULT 0,
+        suporte_count INTEGER DEFAULT 0,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar tabela de histórico de pontos
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS points_history (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(20) NOT NULL,
+        activity_type VARCHAR(50) NOT NULL,
+        points_earned INTEGER NOT NULL,
+        channel_id VARCHAR(20),
+        message_id VARCHAR(20),
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES user_points(user_id) ON DELETE CASCADE
+      )
+    `);
+
     console.log('Tabelas do banco de dados inicializadas');
   } catch (error) {
     console.error('Erro ao inicializar banco de dados:', error);
@@ -610,6 +644,146 @@ async function countTwitterLikes(postId) {
   } catch (error) {
     console.error('Erro ao contar curtidas Twitter:', error);
     return 0;
+  }
+}
+
+// Funções para gerenciar pontos no PostgreSQL
+
+// Função para criar ou atualizar usuário na tabela de pontos
+async function createOrUpdateUserPoints(userId, username) {
+  try {
+    await pgClient.query(`
+      INSERT INTO user_points (user_id, username) 
+      VALUES ($1, $2) 
+      ON CONFLICT (user_id) 
+      DO UPDATE SET username = $2, last_updated = CURRENT_TIMESTAMP
+    `, [userId, username]);
+  } catch (error) {
+    console.error('Erro ao criar/atualizar usuário de pontos:', error);
+  }
+}
+
+// Função para adicionar pontos
+async function addPoints(userId, username, activityType, points, channelId = null, messageId = null, description = null) {
+  try {
+    // Garantir que o usuário existe na tabela
+    await createOrUpdateUserPoints(userId, username);
+
+    // Adicionar ao histórico
+    await pgClient.query(`
+      INSERT INTO points_history (user_id, activity_type, points_earned, channel_id, message_id, description)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [userId, activityType, points, channelId, messageId, description]);
+
+    // Atualizar contadores baseado no tipo de atividade
+    let updateQuery = 'UPDATE user_points SET total_points = total_points + $1, last_updated = CURRENT_TIMESTAMP';
+    let updateParams = [points, userId];
+
+    switch(activityType) {
+      case 'entregas':
+        updateQuery += ', entregas_count = entregas_count + 1';
+        break;
+      case 'vip':
+        updateQuery += ', vip_count = vip_count + 1';
+        break;
+      case 'edicao':
+        updateQuery += ', edicao_count = edicao_count + 1';
+        break;
+      case 'encontrar':
+        updateQuery += ', encontrar_count = encontrar_count + 1';
+        break;
+      case 'recrutamento':
+        updateQuery += ', recrutamento_count = recrutamento_count + 1';
+        break;
+      case 'verificacao':
+        updateQuery += ', verificacao_count = verificacao_count + 1';
+        break;
+      case 'suporte':
+        updateQuery += ', suporte_count = suporte_count + 1';
+        break;
+    }
+
+    updateQuery += ' WHERE user_id = $2';
+    await pgClient.query(updateQuery, updateParams);
+
+    console.log(`Pontos adicionados: ${username} (+${points} pontos por ${activityType})`);
+  } catch (error) {
+    console.error('Erro ao adicionar pontos:', error);
+    throw error;
+  }
+}
+
+// Função para buscar pontos de um usuário
+async function getUserPoints(userId) {
+  try {
+    const result = await pgClient.query(`
+      SELECT * FROM user_points WHERE user_id = $1
+    `, [userId]);
+    
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Erro ao buscar pontos do usuário:', error);
+    return null;
+  }
+}
+
+// Função para buscar ranking de pontos
+async function getPointsRanking(limit = 10) {
+  try {
+    const result = await pgClient.query(`
+      SELECT user_id, username, total_points, 
+             entregas_count, vip_count, edicao_count, encontrar_count,
+             recrutamento_count, verificacao_count, suporte_count,
+             last_updated
+      FROM user_points 
+      ORDER BY total_points DESC, last_updated DESC 
+      LIMIT $1
+    `, [limit]);
+    
+    return result.rows;
+  } catch (error) {
+    console.error('Erro ao buscar ranking de pontos:', error);
+    return [];
+  }
+}
+
+// Função para buscar histórico de pontos de um usuário
+async function getUserPointsHistory(userId, limit = 20) {
+  try {
+    const result = await pgClient.query(`
+      SELECT activity_type, points_earned, description, created_at
+      FROM points_history 
+      WHERE user_id = $1 
+      ORDER BY created_at DESC 
+      LIMIT $2
+    `, [userId, limit]);
+    
+    return result.rows;
+  } catch (error) {
+    console.error('Erro ao buscar histórico de pontos:', error);
+    return [];
+  }
+}
+
+// Função para resetar pontos de um usuário (apenas admins)
+async function resetUserPoints(userId) {
+  try {
+    await pgClient.query(`
+      UPDATE user_points 
+      SET total_points = 0, entregas_count = 0, vip_count = 0, 
+          edicao_count = 0, encontrar_count = 0, recrutamento_count = 0,
+          verificacao_count = 0, suporte_count = 0, last_updated = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+    `, [userId]);
+
+    await pgClient.query(`
+      DELETE FROM points_history WHERE user_id = $1
+    `, [userId]);
+
+    console.log(`Pontos resetados para usuário: ${userId}`);
+  } catch (error) {
+    console.error('Erro ao resetar pontos:', error);
+    throw error;
   }
 }
 
@@ -2221,6 +2395,70 @@ Selecione uma área para acessar suas funções específicas:
     await message.channel.send({ embeds: [painelEmbed], components: [mainButtons1, mainButtons2] });
   }
 
+  // Comandos administrativos de pontos
+  if (message.content.startsWith('!addpontos')) {
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasAdminRole = message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem adicionar pontos.');
+    }
+
+    const args = message.content.split(' ');
+    if (args.length < 4) {
+      return message.reply('❌ Uso: `!addpontos @usuário <tipo> <pontos> [descrição]`\nTipos: entregas, vip, edicao, encontrar, recrutamento, verificacao, suporte');
+    }
+
+    const targetUser = message.mentions.users.first();
+    if (!targetUser) {
+      return message.reply('❌ Mencione um usuário válido.');
+    }
+
+    const activityType = args[2].toLowerCase();
+    const points = parseInt(args[3]);
+    const description = args.slice(4).join(' ') || `Pontos adicionados manualmente por ${message.author.username}`;
+
+    const validTypes = ['entregas', 'vip', 'edicao', 'encontrar', 'recrutamento', 'verificacao', 'suporte'];
+    if (!validTypes.includes(activityType)) {
+      return message.reply('❌ Tipo inválido. Use: entregas, vip, edicao, encontrar, recrutamento, verificacao, suporte');
+    }
+
+    if (isNaN(points) || points <= 0) {
+      return message.reply('❌ Quantidade de pontos deve ser um número positivo.');
+    }
+
+    try {
+      await addPoints(targetUser.id, targetUser.displayName || targetUser.username, activityType, points, message.channel.id, message.id, description);
+      
+      await message.reply(`✅ **${points} pontos** adicionados para ${targetUser} na categoria **${activityType}**!`);
+    } catch (error) {
+      console.error('Erro ao adicionar pontos:', error);
+      await message.reply('❌ Erro ao adicionar pontos. Tente novamente.');
+    }
+  }
+
+  if (message.content.startsWith('!resetpontos')) {
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasAdminRole = message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem resetar pontos.');
+    }
+
+    const targetUser = message.mentions.users.first();
+    if (!targetUser) {
+      return message.reply('❌ Mencione um usuário válido para resetar os pontos.');
+    }
+
+    try {
+      await resetUserPoints(targetUser.id);
+      await message.reply(`✅ Pontos de ${targetUser} foram resetados com sucesso!`);
+    } catch (error) {
+      console.error('Erro ao resetar pontos:', error);
+      await message.reply('❌ Erro ao resetar pontos. Tente novamente.');
+    }
+  }
+
   if (message.content === '!verificar') {
     const verificationEmbed = new EmbedBuilder()
       .setTitle('**Verificação**')
@@ -2252,6 +2490,163 @@ Selecione uma área para acessar suas funções específicas:
     );
 
     await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
+  }
+
+  // Comando !pontos
+  if (message.content.startsWith('!pontos')) {
+    const args = message.content.split(' ');
+    let targetUser = message.author;
+
+    // Se foi mencionado um usuário, usar esse usuário
+    if (message.mentions.users.size > 0) {
+      targetUser = message.mentions.users.first();
+    } 
+    // Se foi fornecido um ID, tentar buscar o usuário
+    else if (args[1]) {
+      try {
+        targetUser = await client.users.fetch(args[1]);
+      } catch (error) {
+        console.error('Erro ao buscar usuário:', error);
+      }
+    }
+
+    // Subcomandos administrativos
+    if (args[1] === 'ranking') {
+      try {
+        const ranking = await getPointsRanking(10);
+        
+        if (ranking.length === 0) {
+          return message.reply('📊 Nenhum usuário com pontos registrados ainda.');
+        }
+
+        let rankingText = '🏆 **TOP 10 RANKING DE PONTOS:**\n\n';
+        
+        for (let i = 0; i < ranking.length; i++) {
+          const user = ranking[i];
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
+          rankingText += `${medal} **${user.username}** - ${user.total_points} pontos\n`;
+        }
+
+        const rankingEmbed = new EmbedBuilder()
+          .setTitle('🏆 RANKING DE PONTOS')
+          .setDescription(rankingText)
+          .setColor('#FFD700')
+          .setTimestamp();
+
+        return message.reply({ embeds: [rankingEmbed] });
+      } catch (error) {
+        console.error('Erro ao buscar ranking:', error);
+        return message.reply('❌ Erro ao buscar ranking de pontos.');
+      }
+    }
+
+    if (args[1] === 'historico' && args[2]) {
+      try {
+        const userId = args[2].replace(/[<@!>]/g, '');
+        const history = await getUserPointsHistory(userId, 15);
+        
+        if (history.length === 0) {
+          return message.reply('📊 Nenhum histórico de pontos encontrado para este usuário.');
+        }
+
+        let historyText = '📜 **HISTÓRICO DE PONTOS:**\n\n';
+        
+        history.forEach(entry => {
+          const date = new Date(entry.created_at).toLocaleDateString('pt-BR');
+          historyText += `• **${entry.activity_type}** (+${entry.points_earned} pontos) - ${date}\n`;
+          if (entry.description) {
+            historyText += `  ${entry.description}\n`;
+          }
+        });
+
+        const historyEmbed = new EmbedBuilder()
+          .setTitle('📜 HISTÓRICO DE PONTOS')
+          .setDescription(historyText)
+          .setColor('#4169e1')
+          .setTimestamp();
+
+        return message.reply({ embeds: [historyEmbed] });
+      } catch (error) {
+        console.error('Erro ao buscar histórico:', error);
+        return message.reply('❌ Erro ao buscar histórico de pontos.');
+      }
+    }
+
+    try {
+      // Buscar pontos do usuário no banco de dados
+      const userPoints = await getUserPoints(targetUser.id);
+      
+      if (!userPoints) {
+        // Se não existe no banco, criar entrada inicial
+        await createOrUpdateUserPoints(targetUser.id, targetUser.displayName || targetUser.username);
+        
+        const newUserEmbed = new EmbedBuilder()
+          .setTitle('📊 ESTATÍSTICAS DE PONTOS')
+          .setDescription(`
+**Usuário:** ${targetUser.displayName || targetUser.username}
+**ID:** ${targetUser.id}
+
+**Pontos Totais:** 0
+
+**Detalhamento:**
+• **Entregas:** 0 (0 pontos)
+• **VIP:** 0 (0 pontos)
+• **Edição:** 0 (0 pontos)
+• **Encontrar:** 0 (0 pontos)
+• **Recrutamento:** 0 (0 pontos)
+• **Verificação:** 0 (0 pontos)
+• **Suporte:** 0 (0 pontos)
+
+*Usuário registrado no sistema de pontos!*
+`)
+          .setColor('#9c41ff')
+          .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+          .setTimestamp();
+
+        return message.reply({ embeds: [newUserEmbed] });
+      }
+
+      // Calcular pontos detalhados
+      const entregasPontos = userPoints.entregas_count * 2;
+      const vipPontos = userPoints.vip_count * 4;
+      const edicaoPontos = userPoints.edicao_count * 3;
+      const encontrarPontos = userPoints.encontrar_count * 1;
+      const recrutamentoPontos = userPoints.recrutamento_count * 1;
+      const verificacaoPontos = userPoints.verificacao_count * 1;
+      const suportePontos = userPoints.suporte_count * 1;
+
+      const pointsEmbed = new EmbedBuilder()
+        .setTitle('📊 ESTATÍSTICAS DE PONTOS')
+        .setDescription(`
+**Usuário:** ${userPoints.username}
+**ID:** ${targetUser.id}
+
+**Pontos Totais:** ${userPoints.total_points}
+
+**📈 ATIVIDADES DE MAKER:**
+• **Entregas:** ${userPoints.entregas_count} (${entregasPontos} pontos)
+• **VIP:** ${userPoints.vip_count} (${vipPontos} pontos)
+• **Edição:** ${userPoints.edicao_count} (${edicaoPontos} pontos)
+• **Encontrar:** ${userPoints.encontrar_count} (${encontrarPontos} pontos)
+
+**👥 ATIVIDADES DE STAFF:**
+• **Recrutamento:** ${userPoints.recrutamento_count} (${recrutamentoPontos} pontos)
+• **Verificação:** ${userPoints.verificacao_count} (${verificacaoPontos} pontos)
+• **Suporte:** ${userPoints.suporte_count} (${suportePontos} pontos)
+
+**Última atualização:** ${new Date(userPoints.last_updated).toLocaleDateString('pt-BR')}
+`)
+        .setColor('#9c41ff')
+        .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+        .setFooter({ text: 'Use !pontos ranking para ver o ranking geral' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [pointsEmbed] });
+
+    } catch (error) {
+      console.error('Erro no comando !pontos:', error);
+      await message.reply('❌ Erro ao buscar as estatísticas. Tente novamente.');
+    }
   }
 });
 
