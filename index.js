@@ -1688,7 +1688,59 @@ Esta foi a postagem que mais recebeu curtidas na última semana:
 }
 
 client.on('messageCreate', async message => {
-  // Sistema de webhook para anexos do cargo específico
+  // Sistema de pontos automático por mensagens em canais específicos
+  if (!message.author.bot && message.member) {
+    // Configuração de canais que dão pontos e quantos pontos cada um dá
+    const pontosCanais = {
+      // SUBSTITUA PELOS IDs CORRETOS DOS SEUS CANAIS:
+      
+      // Canais de entregas - 2 pontos (substitua pelos IDs dos seus canais de entrega)
+      '1329894823821312021': { tipo: 'entregas', pontos: 2 },
+      '1329894823821312021': { tipo: 'entregas', pontos: 2 },
+      
+      // Canais VIP - 4 pontos (substitua pelos IDs dos seus canais VIP)
+      '1329894869421920390': { tipo: 'vip', pontos: 4 },
+      
+      // Canais de edição - 3 pontos
+      '1329894956503924839': { tipo: 'edicao', pontos: 3 }, // este já estava no código
+      
+      // Canais de suporte - 1 ponto  
+      '1218390839722639461': { tipo: 'suporte', pontos: 1 }, // este já estava no código
+      
+      // Adicione mais canais conforme necessário:
+      // 'ID_DO_CANAL': { tipo: 'tipo_atividade', pontos: quantidade },
+    };
+
+    const canalConfig = pontosCanais[message.channel.id];
+    
+    if (canalConfig) {
+      try {
+        // Verificar se o usuário tem permissão para ganhar pontos neste canal
+        const isStaff = message.member.roles.cache.has('1094385139976507523'); // Staff role
+        const isMaker = message.member.roles.cache.has('1065441764460199967'); // Maker role
+        const isPostador = message.member.roles.cache.has('1072027317297229875'); // Postador role
+        
+        // Permitir pontos apenas para staff, makers ou postadores
+        if (isStaff || isMaker || isPostador) {
+          await addPoints(
+            message.author.id,
+            message.member.displayName || message.author.username,
+            canalConfig.tipo,
+            canalConfig.pontos,
+            message.channel.id,
+            message.id,
+            `Mensagem enviada no canal ${message.channel.name}`
+          );
+          
+          console.log(`Pontos adicionados: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
+        }
+      } catch (error) {
+        console.error('Erro ao adicionar pontos por mensagem:', error);
+      }
+    }
+  }
+
+  // sistema de webhook para anexos do cargo específico
   if (message.channel.id === '1392228130361708645' && 
       message.member && 
       message.member.roles.cache.has('1392229571599929465') && 
