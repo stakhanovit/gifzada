@@ -1650,7 +1650,7 @@ Nossa equipe é formada por pessoas talentosas que mantêm o servidor vivo com c
 Basta preencher o formulário na aba de migração e responder às perguntas com atenção.
 `)
       .setColor('#9c41ff')
-      .setImage('https://cdn.discordapp.com/attachments/1385367538409410723/1386788085664321628/APoeGPo.png?ex=685afa8c&is=6859a90c&hm=e536d88518a990b8c762f742c2a352dad67d47ffd18738addb5d689d13d01f97&')
+      .setImage('https://media.discordapp.net/attachments/1381309996393959619/1399226611127029801/image.png?ex=68883ad4&is=6886e954&hm=7c8718351016bab3ab3f6bbd66388be0c0ed9dafd065142b8a3b2eb28ec69c45&=&format=webp&quality=lossless')
       .setThumbnail(message.guild.iconURL({ dynamic: true, size: 512 }));
 
     const recruitmentRow = new ActionRowBuilder().addComponents(
