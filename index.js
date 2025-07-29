@@ -780,7 +780,7 @@ async function getUserPoints(userId) {
     const result = await pgClient.query(`
       SELECT * FROM user_points WHERE user_id = $1
     `, [userId]);
-    
+
     return result.rows[0] || null;
   } catch (error) {
     console.error('Erro ao buscar pontos do usuário:', error);
@@ -800,7 +800,7 @@ async function getPointsRanking(limit = 10) {
       ORDER BY total_points DESC, last_updated DESC 
       LIMIT $1
     `, [limit]);
-    
+
     return result.rows;
   } catch (error) {
     console.error('Erro ao buscar ranking de pontos:', error);
@@ -818,7 +818,7 @@ async function getUserPointsHistory(userId, limit = 20) {
       ORDER BY created_at DESC 
       LIMIT $2
     `, [userId, limit]);
-    
+
     return result.rows;
   } catch (error) {
     console.error('Erro ao buscar histórico de pontos:', error);
@@ -877,7 +877,7 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
 
   try {
     let avatarUrl, displayName;
-    
+
     if (anonimo) {
       // Usuário anônimo
       avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -890,7 +890,7 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
 
     // Carregar avatar
     const avatar = await loadImage(avatarUrl);
-    
+
     // Desenhar avatar (circular)
     ctx.save();
     ctx.beginPath();
@@ -914,11 +914,11 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
     // Texto da postagem
     ctx.fillStyle = modoEscuro ? '#ffffff' : '#14171a';
     ctx.font = '18px "Arial Bold"';
-    
+
     // Quebrar texto em linhas
     const linhas = quebrarTexto(ctx, texto, 480);
     let yPos = 120;
-    
+
     linhas.forEach(linha => {
       ctx.fillText(linha, 30, yPos);
       yPos += 25;
@@ -927,7 +927,7 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
     // Mencionar usuário (se houver)
     if (mencionar) {
       yPos += 20;
-      
+
       // Linha de separação
       ctx.strokeStyle = modoEscuro ? '#38444d' : '#e1e8ed';
       ctx.lineWidth = 1;
@@ -935,20 +935,20 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
       ctx.moveTo(30, yPos);
       ctx.lineTo(570, yPos);
       ctx.stroke();
-      
+
       yPos += 30;
-      
+
       try {
         // Avatar do mencionado
         const mencionadoAvatar = await loadImage(mencionar.displayAvatarURL({ extension: 'png', size: 64 }));
-        
+
         ctx.save();
         ctx.beginPath();
         ctx.arc(50, yPos + 15, 15, 0, Math.PI * 2);
         ctx.clip();
         ctx.drawImage(mencionadoAvatar, 35, yPos, 30, 30);
         ctx.restore();
-        
+
         // Nome do mencionado
         ctx.fillStyle = '#1da1f2';
         ctx.font = 'bold 14px "Arial Bold"';
@@ -981,7 +981,7 @@ async function criarPostagemTwitter(autor, texto, mencionar, anonimo, modoEscuro
       hour: '2-digit', 
       minute: '2-digit' 
     });
-    
+
     ctx.fillStyle = modoEscuro ? '#8899a6' : '#657786';
     ctx.font = '12px "Arial Bold"';
     ctx.fillText(timestamp, 450, bottomY + 25);
@@ -1003,7 +1003,7 @@ function quebrarTexto(ctx, texto, larguraMaxima) {
   palavras.forEach(palavra => {
     const testeLinhaAtual = linhaAtual + (linhaAtual ? ' ' : '') + palavra;
     const largura = ctx.measureText(testeLinhaAtual).width;
-    
+
     if (largura > larguraMaxima && linhaAtual) {
       linhas.push(linhaAtual);
       linhaAtual = palavra;
@@ -1011,11 +1011,11 @@ function quebrarTexto(ctx, texto, larguraMaxima) {
       linhaAtual = testeLinhaAtual;
     }
   });
-  
+
   if (linhaAtual) {
     linhas.push(linhaAtual);
   }
-  
+
   return linhas;
 }
 
@@ -1087,7 +1087,7 @@ Esta thread foi automaticamente encerrada após 8 minutos de inatividade total.
             try {
               await threadCheck.setLocked(true);
               await threadCheck.setArchived(true);
-              
+
               // Limpar dados da thread
               clearInactivityTimer(threadId);
               conversaoEscolha.delete(threadId);
@@ -1646,11 +1646,11 @@ ${objetivo}
 async function verificarPerfilsGifs() {
   try {
     console.log('Iniciando verificação automática de perfis /gifs...');
-    
+
     // Buscar todos os usuários que usaram o comando !gifs
     const result = await pgClient.query('SELECT user_id, username FROM gifs_users');
     const gifsUsers = result.rows;
-    
+
     if (gifsUsers.length === 0) {
       console.log('Nenhum usuário para verificar.');
       return;
@@ -1673,7 +1673,7 @@ async function verificarPerfilsGifs() {
         // Buscar o usuário no Discord
         const user = await client.users.fetch(userData.user_id);
         const member = await guild.members.fetch(userData.user_id).catch(() => null);
-        
+
         if (!member) {
           // Usuário não está mais no servidor, remover da tabela
           await pgClient.query('DELETE FROM gifs_users WHERE user_id = $1', [userData.user_id]);
@@ -1685,7 +1685,7 @@ async function verificarPerfilsGifs() {
         const fetchedUser = await client.users.fetch(userData.user_id, { force: true });
         const userBio = fetchedUser.bio || '';
         const hasGifsInProfile = userBio.includes('/gifs');
-        
+
         // Atualizar status no banco
         await pgClient.query(
           'UPDATE gifs_users SET last_checked = CURRENT_TIMESTAMP, has_gifs_in_profile = $1 WHERE user_id = $2',
@@ -1698,7 +1698,7 @@ async function verificarPerfilsGifs() {
             await member.roles.remove(gifsRoleId);
             console.log(`Cargo /gifs removido de ${user.username} (${user.id})`);
           }
-          
+
           // Remover da tabela
           await pgClient.query('DELETE FROM gifs_users WHERE user_id = $1', [userData.user_id]);
           relatorio.push(`${userData.username} - Cargo removido (sem /gifs no perfil)`);
@@ -1710,7 +1710,7 @@ async function verificarPerfilsGifs() {
 
         // Delay entre verificações para não sobrecarregar a API
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
       } catch (error) {
         console.error(`Erro ao verificar usuário ${userData.username}:`, error);
         relatorio.push(`${userData.username} - Erro na verificação`);
@@ -1721,7 +1721,7 @@ async function verificarPerfilsGifs() {
     // Enviar relatório no canal de logs (caso exista)
     const logChannelId = '1218390839722639461'; // Canal de suporte como exemplo
     const logChannel = client.channels.cache.get(logChannelId);
-    
+
     if (logChannel) {
       const relatorioEmbed = new EmbedBuilder()
         .setTitle('📊 RELATÓRIO DE VERIFICAÇÃO /GIFS')
@@ -1748,7 +1748,7 @@ ${relatorio.length > 20 ? `\n*... e mais ${relatorio.length - 20} verificações
     }
 
     console.log(`Verificação concluída: ${removidos} removidos, ${mantidos} mantidos, ${erros} erros`);
-    
+
   } catch (error) {
     console.error('Erro na verificação automática de perfis /gifs:', error);
   }
@@ -1908,7 +1908,7 @@ client.on('messageCreate', async message => {
       };
 
       const canalConfig = pontosCanaisMaker[message.channel.id];
-      
+
       if (canalConfig) {
         try {
           await addMultiServerPoints(
@@ -1920,14 +1920,14 @@ client.on('messageCreate', async message => {
             message.id,
             `Mensagem no servidor maker - ${message.channel.name}`
           );
-          
+
           console.log(`Pontos servidor maker: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
         } catch (error) {
           console.error('Erro ao adicionar pontos servidor maker:', error);
         }
       }
     }
-    
+
     // Sistema antigo para servidor principal (manter compatibilidade)
     if (message.guild.id === '953748240589787136' && message.member) {
       const pontosCanais = {
@@ -1935,13 +1935,13 @@ client.on('messageCreate', async message => {
       };
 
       const canalConfig = pontosCanais[message.channel.id];
-      
+
       if (canalConfig) {
         try {
           const isStaff = message.member.roles.cache.has('1094385139976507523');
           const isMaker = message.member.roles.cache.has('1065441764460199967');
           const isPostador = message.member.roles.cache.has('1072027317297229875');
-          
+
           if (isStaff || isMaker || isPostador) {
             await addPoints(
               message.author.id,
@@ -1952,7 +1952,7 @@ client.on('messageCreate', async message => {
               message.id,
               `Mensagem enviada no canal ${message.channel.name}`
             );
-            
+
             console.log(`Pontos adicionados: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
           }
         } catch (error) {
@@ -2233,7 +2233,7 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
     }
 
     const channelId = message.content.split(' ')[1];
-    
+
     if (!channelId) {
       return message.reply({
         content: '❌ Por favor, forneça o ID do canal.\n**Uso:** `!fecharconversor [ID_DO_CANAL]`',
@@ -2242,7 +2242,7 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
     }
 
     const targetChannel = client.channels.cache.get(channelId);
-    
+
     if (!targetChannel) {
       return message.reply({
         content: '❌ Canal não encontrado. Verifique se o ID está correto.',
@@ -2268,10 +2268,10 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
       // Buscar todas as threads do canal
       const threads = await targetChannel.threads.fetchActive();
       const archivedThreads = await targetChannel.threads.fetchArchived();
-      
+
       // Combinar threads ativas e arquivadas
       const allThreads = new Map([...threads.threads, ...archivedThreads.threads]);
-      
+
       const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000); // 1 dia em milliseconds
       let threadsAbertas = 0;
       let threadsFechadas = 0;
@@ -2280,7 +2280,7 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
 
       for (const [threadId, thread] of allThreads) {
         threadsProcessadas++;
-        
+
         // Verificar se a thread é de conversão (tem nome relacionado a conversão)
         const isConversionThread = thread.name.includes('Conversão') || 
                                    thread.name.includes('🎞️') || 
@@ -2341,7 +2341,7 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
         detailsText = sortedDetails.slice(0, 10).map(thread => 
           `**${thread.name}** (${thread.age}d) - *${thread.status}*`
         ).join('\n');
-        
+
         if (sortedDetails.length > 10) {
           detailsText += `\n*... e mais ${sortedDetails.length - 10} thread(s)*`;
         }
@@ -2400,7 +2400,7 @@ ${detailsText}
 
     } catch (error) {
       console.error('Erro ao processar comando fecharconversor:', error);
-      
+
       const errorEmbed = new EmbedBuilder()
         .setTitle('❌ **ERRO NO PROCESSAMENTO**')
         .setDescription(`
@@ -2457,7 +2457,7 @@ ${error.message}
     );
 
     const bannerAttachment = new AttachmentBuilder('./banner.png', { name: 'banner.png' });
-    
+
     await message.channel.send({ 
       embeds: [notifyEmbed], 
       components: [notifyRow],
@@ -2703,7 +2703,7 @@ Selecione uma área para acessar suas funções específicas:
 
     try {
       await addPoints(targetUser.id, targetUser.displayName || targetUser.username, activityType, points, message.channel.id, message.id, description);
-      
+
       await message.reply(`✅ **${points} pontos** adicionados para ${targetUser} na categoria **${activityType}**!`);
     } catch (error) {
       console.error('Erro ao adicionar pontos:', error);
@@ -2769,18 +2769,18 @@ Selecione uma área para acessar suas funções específicas:
   // Comando !pontos (novo sistema multi-servidor)
   if (message.content === '!pontos') {
     const userId = message.author.id;
-    
+
     try {
       // Buscar dados do usuário no servidor principal
       const mainGuild = client.guilds.cache.get('953748240589787136');
       const makerGuild = client.guilds.cache.get('1182331070750933073');
-      
+
       if (!mainGuild) {
         return message.reply('❌ Servidor principal não encontrado.');
       }
 
       const mainMember = await mainGuild.members.fetch(userId).catch(() => null);
-      
+
       if (!mainMember) {
         return message.reply('❌ Você não está no servidor principal.');
       }
@@ -2793,7 +2793,7 @@ Selecione uma área para acessar suas funções específicas:
 
       // Buscar pontos do usuário
       const userPoints = await getUserPoints(userId);
-      
+
       if (!userPoints) {
         await createOrUpdateUserPoints(userId, mainMember.displayName || mainMember.user.username);
         const newUserEmbed = new EmbedBuilder()
@@ -2913,7 +2913,81 @@ Selecione uma área para acessar suas funções específicas:
     return;
   }
 
-  // Comando !pontos reset (apenas administradores)
+  // Comando !resetpontos (apenas administradores)
+  if (message.content === '!resetpontos') {
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasAdminRole = message.member && message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem usar este comando.');
+    }
+
+    try {
+      // Buscar total de usuários antes do reset
+      const totalUsersResult = await pgClient.query('SELECT COUNT(*) as count FROM user_points');
+      const totalUsers = parseInt(totalUsersResult.rows[0].count);
+
+      const totalHistoryResult = await pgClient.query('SELECT COUNT(*) as count FROM points_history');
+      const totalHistory = parseInt(totalHistoryResult.rows[0].count);
+
+      // Resetar todos os pontos do sistema
+      await pgClient.query('DELETE FROM points_history');
+      await pgClient.query('DELETE FROM user_points');
+
+      const resetEmbed = new EmbedBuilder()
+        .setTitle('🔄 SISTEMA DE PONTOS RESETADO')
+        .setDescription(`
+**Sistema completamente resetado!**
+
+✅ **Ações realizadas:**
+• **${totalUsers}** usuários tiveram pontos zerados
+• **${totalHistory}** registros de histórico removidos
+• Rankings completamente limpos
+• Todos os contadores reiniciados
+
+**📊 DADOS REMOVIDOS:**
+• Pontos de entregas, VIP, edição
+• Pontos de recrutamento, verificação, suporte
+• Histórico completo de atividades
+• Estatísticas de progresso
+
+**Resetado por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+> 🔄 *O sistema está pronto para começar do zero*
+`)
+        .setColor('#ff6b6b')
+        .addFields(
+          { 
+            name: '👥 Usuários Afetados', 
+            value: `${totalUsers} usuários`, 
+            inline: true 
+          },
+          { 
+            name: '📝 Histórico Removido', 
+            value: `${totalHistory} registros`, 
+            inline: true 
+          },
+          { 
+            name: '🕒 Processamento', 
+            value: `Instantâneo`, 
+            inline: true 
+          }
+        )
+        .setFooter({ text: 'SISTEMA DE PONTOS GIFZADA • Reset Completo' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [resetEmbed] });
+
+      console.log(`Sistema de pontos resetado por ${message.author.username} (${message.author.id}) - ${totalUsers} usuários, ${totalHistory} registros removidos`);
+    } catch (error) {
+      console.error('Erro ao resetar sistema de pontos:', error);
+      await message.reply('❌ Erro ao resetar sistema de pontos. Tente novamente.');
+    }
+    return;
+  }
+
+  // Comando !pontos reset (apenas administradores) - Mantido para compatibilidade
   if (message.content === '!pontos reset') {
     const adminRoles = ['1385756391284805713', '1065441743379628043', '1065441744726020126', '1386493660010516693', '1317652394351525959'];
     const hasAdminRole = message.member && message.member.roles.cache.some(role => adminRoles.includes(role.id));
@@ -2948,7 +3022,7 @@ Selecione uma área para acessar suas funções específicas:
         .setTimestamp();
 
       await message.reply({ embeds: [resetEmbed] });
-      
+
       console.log(`Sistema de pontos resetado por ${message.author.username} (${message.author.id})`);
     } catch (error) {
       console.error('Erro ao resetar sistema de pontos:', error);
@@ -2962,46 +3036,46 @@ Selecione uma área para acessar suas funções específicas:
     try {
       const userId = message.author.id;
       const user = message.author;
-      
+
       // Função para verificar bio com múltiplas tentativas
       const checkBioWithRetries = async (maxRetries = 3) => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             console.log(`[TENTATIVA ${attempt}/${maxRetries}] Buscando perfil de ${user.username} (${userId})`);
-            
+
             // Limpar cache antes de buscar novamente
             client.users.cache.delete(userId);
-            
+
             // Buscar perfil com cache forçado
             const fetchedUser = await client.users.fetch(userId, { 
               force: true,
               cache: false 
             });
-            
+
             // Aguardar baseado na tentativa (mais tempo a cada tentativa)
             const waitTime = attempt * 2000; // 2s, 4s, 6s
             console.log(`[TENTATIVA ${attempt}] Aguardando ${waitTime}ms para sincronização...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
-            
+
             // Verificar bio
             const userBio = fetchedUser.bio || '';
             console.log(`[TENTATIVA ${attempt}] Bio encontrada: "${userBio}"`);
             console.log(`[TENTATIVA ${attempt}] Tamanho da bio: ${userBio.length} caracteres`);
-            
+
             // Verificar se tem /gifs (várias variações)
             const variations = ['/gifs', '/gif', 'gifs', 'gif'];
             const foundVariations = [];
-            
+
             for (const variation of variations) {
               if (userBio.toLowerCase().includes(variation.toLowerCase())) {
                 foundVariations.push(variation);
               }
             }
-            
+
             console.log(`[TENTATIVA ${attempt}] Variações encontradas: [${foundVariations.join(', ')}]`);
-            
+
             const hasGifs = foundVariations.length > 0;
-            
+
             if (hasGifs || attempt === maxRetries) {
               return {
                 hasGifs,
@@ -3010,9 +3084,9 @@ Selecione uma área para acessar suas funções específicas:
                 attempt
               };
             }
-            
+
             console.log(`[TENTATIVA ${attempt}] /gifs não encontrado, tentando novamente...`);
-            
+
           } catch (error) {
             console.error(`[TENTATIVA ${attempt}] Erro ao buscar perfil:`, error);
             if (attempt === maxRetries) {
@@ -3021,11 +3095,11 @@ Selecione uma área para acessar suas funções específicas:
           }
         }
       };
-      
+
       console.log(`\n=== INICIANDO VERIFICAÇÃO DE BIO PARA ${user.username} ===`);
       const bioCheck = await checkBioWithRetries(3);
       console.log(`=== RESULTADO FINAL: ${bioCheck.hasGifs ? 'ENCONTRADO' : 'NÃO ENCONTRADO'} ===\n`);
-      
+
       if (!bioCheck.hasGifs) {
         const errorEmbed = new EmbedBuilder()
           .setTitle(' **REQUISITO NÃO ATENDIDO**')
@@ -3074,11 +3148,11 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
 
       console.log(`Bio verificada com sucesso para ${user.username}: "${bioCheck.bio}"`);
       console.log(`Variações /gifs encontradas: [${bioCheck.foundVariations.join(', ')}]`);
-      
+
       // Verificar se o usuário já possui o cargo
       const gifsRoleId = '1399533593360990421';
       const member = message.member;
-      
+
       if (member.roles.cache.has(gifsRoleId)) {
         return message.reply(' Você já possui o cargo `GIFZADA`!');
       }
@@ -3126,12 +3200,12 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
         .setTimestamp();
 
       await message.reply({ embeds: [successEmbed] });
-      
+
       console.log(`✅ CARGO /GIFS CONCEDIDO: ${user.username} (${userId})`);
       console.log(`   Bio: "${bioCheck.bio}"`);
       console.log(`   Variações: [${bioCheck.foundVariations.join(', ')}]`);
       console.log(`   Tentativa: ${bioCheck.attempt}/3\n`);
-      
+
     } catch (error) {
       console.error('❌ ERRO no comando !gifzada:', error);
       console.log(`   Usuário: ${user.username} (${userId})`);
@@ -3145,30 +3219,30 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
   if (message.content === '!pontosranking') {
     try {
       const ranking = await getPointsRanking(20); // Top 20
-      
+
       if (ranking.length === 0) {
         return message.reply(' Nenhum usuário com pontos registrados ainda.');
       }
 
       let rankingText = '';
-      
+
       for (let i = 0; i < ranking.length; i++) {
         const user = ranking[i];
         let medal = '';
-        
+
         if (i === 0) medal = '🥇';
         else if (i === 1) medal = '🥈';
         else if (i === 2) medal = '🥉';
         else medal = `**${i + 1}º**`;
-        
+
         // Calcular total de atividades
         const totalAtividades = user.entregas_count + user.vip_count + user.edicao_count + 
                                user.encontrar_count + user.recrutamento_count + 
                                user.verificacao_count + user.suporte_count;
-        
+
         rankingText += `${medal} **${user.username}**\n`;
         rankingText += `📊 **${user.total_points} pontos** • ${totalAtividades} atividades\n`;
-        
+
         // Mostrar detalhamento das atividades principais
         let atividades = [];
         if (user.entregas_count > 0) atividades.push(`Entregas: ${user.entregas_count}`);
@@ -3178,11 +3252,11 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
         if (user.recrutamento_count > 0) atividades.push(`Recrutamento: ${user.recrutamento_count}`);
         if (user.verificacao_count > 0) atividades.push(`Verificação: ${user.verificacao_count}`);
         if (user.suporte_count > 0) atividades.push(`Suporte: ${user.suporte_count}`);
-        
+
         if (atividades.length > 0) {
           rankingText += `└ ${atividades.slice(0, 3).join(' • ')}${atividades.length > 3 ? '...' : ''}\n`;
         }
-        
+
         rankingText += '\n';
       }
 
@@ -3211,7 +3285,7 @@ ${rankingText}
         .setTimestamp();
 
       await message.reply({ embeds: [rankingEmbed] });
-      
+
     } catch (error) {
       console.error('Erro no comando !pontosranking:', error);
       await message.reply('❌ Erro ao buscar ranking de pontos. Tente novamente.');
@@ -3241,13 +3315,13 @@ ${rankingText}
     if (args[1] === 'ranking') {
       try {
         const ranking = await getPointsRanking(10);
-        
+
         if (ranking.length === 0) {
           return message.reply('📊 Nenhum usuário com pontos registrados ainda.');
         }
 
         let rankingText = '🏆 **TOP 10 RANKING DE PONTOS:**\n\n';
-        
+
         for (let i = 0; i < ranking.length; i++) {
           const user = ranking[i];
           const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`;
@@ -3271,13 +3345,13 @@ ${rankingText}
       try {
         const userId = args[2].replace(/[<@!>]/g, '');
         const history = await getUserPointsHistory(userId, 15);
-        
+
         if (history.length === 0) {
           return message.reply('📊 Nenhum histórico de pontos encontrado para este usuário.');
         }
 
         let historyText = '📜 **HISTÓRICO DE PONTOS:**\n\n';
-        
+
         history.forEach(entry => {
           const date = new Date(entry.created_at).toLocaleDateString('pt-BR');
           historyText += `• **${entry.activity_type}** (+${entry.points_earned} pontos) - ${date}\n`;
@@ -3302,11 +3376,11 @@ ${rankingText}
     try {
       // Buscar pontos do usuário no banco de dados
       const userPoints = await getUserPoints(targetUser.id);
-      
+
       if (!userPoints) {
         // Se não existe no banco, criar entrada inicial
         await createOrUpdateUserPoints(targetUser.id, targetUser.displayName || targetUser.username);
-        
+
         const newUserEmbed = new EmbedBuilder()
           .setTitle('📊 ESTATÍSTICAS DE PONTOS')
           .setDescription(`
@@ -3603,7 +3677,7 @@ client.on('interactionCreate', async interaction => {
 
         // Criar a imagem da postagem
         const imagemBuffer = await criarPostagemTwitter(interaction.user, texto, mencionar, anonimo, modoEscuro);
-        
+
         // Criar attachment
         const attachment = new AttachmentBuilder(imagemBuffer, { name: 'postagem.png' });
 
@@ -3635,6 +3709,17 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (commandName === 'solicitarban') {
+      // Verificar se o usuário tem os cargos específicos para solicitar banimento
+      const authorizedRolesForBan = ['1094385139976507523', '1224755216038236232'];
+      const hasAuthorizedRoleForBan = member.roles.cache.some(role => authorizedRolesForBan.includes(role.id));
+
+      if (!hasAuthorizedRoleForBan) {
+        return interaction.reply({
+          content: '❌ Você não tem permissão para usar este comando. Apenas membros com cargos específicos podem solicitar banimentos.',
+          flags: 1 << 6
+        });
+      }
+
       // Verificar se está no canal correto
       if (interaction.channel.id !== '1399541233650499785') {
         return interaction.reply({
@@ -3684,7 +3769,7 @@ client.on('interactionCreate', async interaction => {
 
         // Enviar para canal de análise
         const analiseChannel = client.channels.cache.get('1399542249682895040');
-        
+
         if (analiseChannel) {
           const analiseEmbed = new EmbedBuilder()
             .setTitle('🚨 **NOVA SOLICITAÇÃO DE BANIMENTO**')
@@ -6113,7 +6198,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
           interaction.message.id,
           `Assumiu ticket de ${pontosTipo}`
         );
-        
+
         console.log(`Pontos por assumir ticket: ${interaction.user.username} (+${pontosValor} por ${pontosTipo})`);
       }
     } catch (error) {
@@ -6802,7 +6887,7 @@ Thread será fechada em alguns segundos...
   // Handlers para sistema de banimento
   if (customId.startsWith('ver_prova_solicitacao_')) {
     const solicitacaoId = customId.replace('ver_prova_solicitacao_', '');
-    
+
     if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
       return interaction.reply({
         content: '❌ Solicitação não encontrada.',
@@ -6811,7 +6896,7 @@ Thread será fechada em alguns segundos...
     }
 
     const solicitacao = global.banSolicitations.get(solicitacaoId);
-    
+
     // Verificar se é o autor da solicitação
     if (interaction.user.id !== solicitacao.requesterId) {
       return interaction.reply({
@@ -6832,7 +6917,7 @@ Thread será fechada em alguns segundos...
 
   if (customId.startsWith('ver_prova_analise_')) {
     const solicitacaoId = customId.replace('ver_prova_analise_', '');
-    
+
     // Verificar se tem o cargo de administrador
     if (!interaction.member.roles.cache.has('1065441743379628043')) {
       return interaction.reply({
@@ -6867,7 +6952,7 @@ Thread será fechada em alguns segundos...
 
   if (customId.startsWith('aprovar_ban_')) {
     const solicitacaoId = customId.replace('aprovar_ban_', '');
-    
+
     // Verificar se tem o cargo de administrador
     if (!interaction.member.roles.cache.has('1065441743379628043')) {
       return interaction.reply({
@@ -6964,7 +7049,7 @@ ${solicitacao.motivo}
 
   if (customId.startsWith('rejeitar_ban_')) {
     const solicitacaoId = customId.replace('rejeitar_ban_', '');
-    
+
     // Verificar se tem o cargo de administrador
     if (!interaction.member.roles.cache.has('1065441743379628043')) {
       return interaction.reply({
@@ -8021,7 +8106,7 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'notify_geral') {
     const roleId = '1236336909513654385';
     const member = interaction.member;
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8040,7 +8125,7 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'notify_pedidos_gif') {
     const roleId = '1065441789605068841';
     const member = interaction.member;
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8059,7 +8144,7 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'notify_pedidos_icon') {
     const roleId = '1236336958452797523';
     const member = interaction.member;
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8086,11 +8171,11 @@ Selecione uma área para acessar suas funções específicas:
     try {
       const roleId = '1065441794684362752';
       const member = interaction.member;
-      
+
       // Remover todas as outras cores antes de adicionar a nova
       const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
       await member.roles.remove(colorRoles.filter(id => id !== roleId));
-      
+
       if (member.roles.cache.has(roleId)) {
         await member.roles.remove(roleId);
         await interaction.reply({ 
@@ -8121,14 +8206,14 @@ Selecione uma área para acessar suas funções específicas:
 
   if (customId === 'nickcolor_y') {
     if (interaction.replied || interaction.deferred) return;
-    
+
     try {
       const roleId = '1065441793304449074';
       const member = interaction.member;
-      
+
       const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
       await member.roles.remove(colorRoles.filter(id => id !== roleId));
-      
+
       if (member.roles.cache.has(roleId)) {
         await member.roles.remove(roleId);
         await interaction.reply({ 
@@ -8149,14 +8234,14 @@ Selecione uma área para acessar suas funções específicas:
 
   if (customId === 'nickcolor_o') {
     if (interaction.replied || interaction.deferred) return;
-    
+
     try {
       const roleId = '1065441795783282898';
       const member = interaction.member;
-      
+
       const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
       await member.roles.remove(colorRoles.filter(id => id !== roleId));
-      
+
       if (member.roles.cache.has(roleId)) {
         await member.roles.remove(roleId);
         await interaction.reply({ 
@@ -8177,14 +8262,14 @@ Selecione uma área para acessar suas funções específicas:
 
   if (customId === 'nickcolor_e') {
     if (interaction.replied || interaction.deferred) return;
-    
+
     try {
       const roleId = '1065441790972399646';
       const member = interaction.member;
-      
+
       const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
       await member.roles.remove(colorRoles.filter(id => id !== roleId));
-      
+
       if (member.roles.cache.has(roleId)) {
         await member.roles.remove(roleId);
         await interaction.reply({ 
@@ -8205,14 +8290,14 @@ Selecione uma área para acessar suas funções específicas:
 
   if (customId === 'nickcolor_f') {
     if (interaction.replied || interaction.deferred) return;
-    
+
     try {
       const roleId = '1236336928807321663';
       const member = interaction.member;
-      
+
       const colorRoles = ['1065441794684362752', '1065441793304449074', '1065441795783282898', '1236336928807321663', '1065441790972399646'];
       await member.roles.remove(colorRoles.filter(id => id !== roleId));
-      
+
       if (member.roles.cache.has(roleId)) {
         await member.roles.remove(roleId);
         await interaction.reply({ 
@@ -8235,7 +8320,7 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_pastel_1') {
     const roleId = '1298119975453593600';
     const member = interaction.member;
-    
+
     // Remover todas as outras cores booster antes de adicionar a nova
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
@@ -8243,7 +8328,7 @@ Selecione uma área para acessar suas funções específicas:
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8262,14 +8347,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_pastel_2') {
     const roleId = '1298119805936734248';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8288,14 +8373,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_pastel_3') {
     const roleId = '1298120196908912660';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8314,14 +8399,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_pastel_4') {
     const roleId = '1298120108719345674';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8340,14 +8425,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_pastel_5') {
     const roleId = '1298120431605121024';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8367,14 +8452,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_neon_1') {
     const roleId = '1398736295278153901';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8393,14 +8478,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_neon_2') {
     const roleId = '1398736303926804530';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8419,14 +8504,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_neon_3') {
     const roleId = '1398736311032090706';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8446,14 +8531,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_metalica_1') {
     const roleId = '1398736652163219557';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8472,14 +8557,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_metalica_2') {
     const roleId = '1398736647537033318';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8498,14 +8583,14 @@ Selecione uma área para acessar suas funções específicas:
   if (customId === 'booster_metalica_3') {
     const roleId = '1398736657041068042';
     const member = interaction.member;
-    
+
     const boosterRoles = [
       '1298119975453593600', '1298119805936734248', '1298120196908912660', '1298120108719345674', '1298120431605121024',
       '1398736295278153901', '1398736303926804530', '1398736311032090706',
       '1398736652163219557', '1398736647537033318', '1398736657041068042'
     ];
     await member.roles.remove(boosterRoles.filter(id => id !== roleId));
-    
+
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId);
       await interaction.reply({ 
@@ -8729,7 +8814,7 @@ Selecione uma área para acessar suas funções específicas:
     }
   }
 
-  
+
 
   if (customId.startsWith('show_likes_')) {
     const postId = customId.replace('show_likes_', '');
@@ -8897,12 +8982,12 @@ client.on('messageCreate', async message => {
   if (message.author.bot || !message.channel.isThread()) return;
 
   const tipoData = conversaoEscolha.get(message.channel.id);
-  
+
   // Se for uma thread de conversor, resetar timer de inatividade
   if (tipoData) {
     resetInactivityTimer(message.channel.id, message.author.id);
   }
-  
+
   const file = message.attachments.first();
   if (!tipoData || !file) return;
 
