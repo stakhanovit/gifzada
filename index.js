@@ -3451,6 +3451,81 @@ ${rankingText}
   }
 });
 
+// Listener para banimentos - enviar log quando um usuário for banido
+client.on('guildBanAdd', async ban => {
+  try {
+    const logChannelId = '1374832443814580244';
+    const logChannel = client.channels.cache.get(logChannelId);
+
+    if (!logChannel) {
+      console.log('Canal de log de banimentos não encontrado');
+      return;
+    }
+
+    // Buscar informações sobre o banimento
+    const bannedUser = ban.user;
+    const guild = ban.guild;
+
+    // Buscar logs de auditoria para encontrar quem executou o ban
+    let executor = null;
+    let reason = 'Não especificado';
+
+    try {
+      const auditLogs = await guild.fetchAuditLogs({
+        type: 22, // MEMBER_BAN_ADD
+        limit: 1
+      });
+
+      const banLog = auditLogs.entries.first();
+      if (banLog && banLog.target.id === bannedUser.id) {
+        executor = banLog.executor;
+        reason = banLog.reason || 'Não especificado';
+      }
+    } catch (auditError) {
+      console.error('Erro ao buscar logs de auditoria:', auditError);
+    }
+
+    // Criar embed do log de banimento
+    const banLogEmbed = new EmbedBuilder()
+      .setTitle('🔨 **USUÁRIO BANIDO**')
+      .setDescription(`
+**Usuário banido:** ${bannedUser.tag} (${bannedUser.id})
+**Executado por:** ${executor ? `${executor.tag} (${executor.id})` : 'Sistema/Desconhecido'}
+**Servidor:** ${guild.name}
+
+**Motivo:**
+\`\`\`
+${reason}
+\`\`\`
+
+**Data do banimento:** ${new Date().toLocaleString('pt-BR')}
+`)
+      .setColor('#ff4444')
+      .setThumbnail(bannedUser.displayAvatarURL({ dynamic: true }))
+      .addFields(
+        { 
+          name: '👤 **Informações do Usuário**', 
+          value: `**Tag:** ${bannedUser.tag}\n**ID:** ${bannedUser.id}\n**Conta criada:** ${bannedUser.createdAt.toLocaleDateString('pt-BR')}`, 
+          inline: true 
+        },
+        { 
+          name: '⚖️ **Informações da Ação**', 
+          value: `**Staff:** ${executor ? executor.tag : 'Desconhecido'}\n**Método:** Ban direto\n**Servidor:** ${guild.name}`, 
+          inline: true 
+        }
+      )
+      .setFooter({ text: 'SISTEMA DE LOGS DE BANIMENTO' })
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [banLogEmbed] });
+
+    console.log(`Log de banimento enviado: ${bannedUser.tag} banido por ${executor ? executor.tag : 'Desconhecido'}`);
+
+  } catch (error) {
+    console.error('Erro ao enviar log de banimento:', error);
+  }
+});
+
 client.on('interactionCreate', async interaction => {
   // Verificar se a interação ainda é válida
   if (interaction.replied || interaction.deferred) {
@@ -6973,17 +7048,13 @@ Thread será fechada em alguns segundos...
     const solicitacao = global.banSolicitations.get(solicitacaoId);
 
     try {
-      // Banir o usuário
       const targetUser = await client.users.fetch(solicitacao.targetUserId);
-      await interaction.guild.members.ban(solicitacao.targetUserId, { 
-        reason: `Banimento aprovado por ${interaction.user.tag} - Motivo: ${solicitacao.motivo}` 
-      });
 
-      // Atualizar embed de análise
+      // Apenas atualizar embed de análise - SEM EXECUTAR BANIMENTO
       const aprovedEmbed = new EmbedBuilder()
-        .setTitle('✅ **BANIMENTO APROVADO E EXECUTADO**')
+        .setTitle('✅ **BANIMENTO APROVADO**')
         .setDescription(`
-**Usuário banido:** ${solicitacao.targetUserTag} (${solicitacao.targetUserId})
+**Usuário para banir:** ${solicitacao.targetUserTag} (${solicitacao.targetUserId})
 **Solicitado por:** ${solicitacao.requesterTag}
 **Aprovado por:** ${interaction.user}
 
@@ -6992,10 +7063,12 @@ Thread será fechada em alguns segundos...
 ${solicitacao.motivo}
 \`\`\`
 
-**Status:** ✅ Ban executado com sucesso
+**Status:** ✅ Solicitação aprovada - **Execute o ban manualmente**
 **Data de aprovação:** ${new Date().toLocaleString('pt-BR')}
+
+> ⚠️ *O banimento deve ser executado manualmente pelo administrador*
 `)
-        .setColor('#00ff00')
+        .setColor('#ffaa00')
         .setFooter({ text: `Solicitação: ${solicitacaoId}` })
         .setTimestamp();
 
@@ -7008,27 +7081,26 @@ ${solicitacao.motivo}
           const messages = await originalChannel.messages.fetch({ limit: 50 });
           const originalMessage = messages.find(msg => 
             msg.embeds.length > 0 && 
-            msg.embeds[0].title?.includes('SOLICITAÇÃO ENVIADA') &&
-            msg.embeds[0].footer?.text?.includes(solicitacaoId)
+            msg.embeds[0].title?.includes('SOLICITAÇÃO ENVIADA')
           );
 
           if (originalMessage) {
-            const concluedEmbed = new EmbedBuilder()
-              .setTitle('✅ **BAN CONCLUÍDO**')
+            const approvedOriginalEmbed = new EmbedBuilder()
+              .setTitle('✅ **SOLICITAÇÃO APROVADA**')
               .setDescription(`
-**Sua solicitação foi aprovada e executada!**
+**Sua solicitação foi aprovada pela administração!**
 
-**Usuário banido:** ${solicitacao.targetUserTag}
+**Usuário relatado:** ${solicitacao.targetUserTag}
 **Motivo:** ${solicitacao.motivo}
 **Aprovado por:** ${interaction.user}
-**Data de conclusão:** ${new Date().toLocaleString('pt-BR')}
+**Data de aprovação:** ${new Date().toLocaleString('pt-BR')}
 
-> ✅ *O usuário foi banido com sucesso do servidor.*
+> ✅ *A solicitação foi aprovada. O banimento será executado em breve.*
 `)
               .setColor('#00ff00')
               .setTimestamp();
 
-            await originalMessage.edit({ embeds: [concluedEmbed], components: [] });
+            await originalMessage.edit({ embeds: [approvedOriginalEmbed], components: [] });
           }
         }
       } catch (updateError) {
@@ -7040,10 +7112,10 @@ ${solicitacao.motivo}
       solicitacao.approvedBy = interaction.user.id;
       global.banSolicitations.set(solicitacaoId, solicitacao);
 
-    } catch (banError) {
-      console.error('Erro ao banir usuário:', banError);
+    } catch (error) {
+      console.error('Erro ao processar aprovação:', error);
       await interaction.reply({
-        content: `❌ Erro ao executar banimento: ${banError.message}`,
+        content: `❌ Erro ao processar aprovação: ${error.message}`,
         flags: 1 << 6
       });
     }
