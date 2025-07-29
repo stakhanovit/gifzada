@@ -3489,14 +3489,16 @@ client.on('interactionCreate', async interaction => {
       });
     }
 
-    // Verificar se o usuário tem algum dos cargos autorizados
-    const hasAuthorizedRole = member.roles.cache.some(role => authorizedRoles.includes(role.id));
+    // Verificar permissões específicas por comando (exceto solicitarban que tem sua própria verificação)
+    if (commandName !== 'solicitarban') {
+      const hasAuthorizedRole = member.roles.cache.some(role => authorizedRoles.includes(role.id));
 
-    if (!hasAuthorizedRole) {
-      return interaction.reply({
-        content: '❌ Você não tem permissão para usar este comando. Apenas membros da staff podem usar comandos de bloqueio/desbloqueio.',
-       flags: 1 << 6
-      });
+      if (!hasAuthorizedRole) {
+        return interaction.reply({
+          content: '❌ Você não tem permissão para usar este comando. Apenas membros da staff podem usar comandos de bloqueio/desbloqueio.',
+         flags: 1 << 6
+        });
+      }
     }
 
     if (commandName === 'lock') {
