@@ -74,7 +74,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS staff_feedback (
         id SERIAL PRIMARY KEY,
         staff_id VARCHAR(20) NOT NULL,
-        user_id VARCHAR(20) NOT NULL,
+        user_id VARCHAR(20),
         rating VARCHAR(20) NOT NULL,
         thread_type VARCHAR(50) NOT NULL,
         thread_id VARCHAR(20),
@@ -138,6 +138,17 @@ async function initializeDatabase() {
         user_id VARCHAR(20) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(post_id, user_id)
+      )
+    `);
+
+    // Criar tabela de usuários que usaram o comando !gifs
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS gifs_users (
+        user_id VARCHAR(20) PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        has_gifs_in_profile BOOLEAN DEFAULT TRUE
       )
     `);
 
@@ -649,6 +660,56 @@ async function countTwitterLikes(postId) {
 
 // Funções para gerenciar pontos no PostgreSQL
 
+// Função para adicionar pontos multi-servidor (sem verificação de cargo)
+async function addMultiServerPoints(userId, username, activityType, points, channelId = null, messageId = null, description = null) {
+  try {
+    // Garantir que o usuário existe na tabela
+    await createOrUpdateUserPoints(userId, username);
+
+    // Adicionar ao histórico
+    await pgClient.query(`
+      INSERT INTO points_history (user_id, activity_type, points_earned, channel_id, message_id, description)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [userId, activityType, points, channelId, messageId, description]);
+
+    // Atualizar contadores baseado no tipo de atividade
+    let updateQuery = 'UPDATE user_points SET total_points = total_points + $1, last_updated = CURRENT_TIMESTAMP';
+    let updateParams = [points, userId];
+
+    switch(activityType) {
+      case 'entregas':
+        updateQuery += ', entregas_count = entregas_count + 1';
+        break;
+      case 'vip':
+        updateQuery += ', vip_count = vip_count + 1';
+        break;
+      case 'edicao':
+        updateQuery += ', edicao_count = edicao_count + 1';
+        break;
+      case 'encontrar':
+        updateQuery += ', encontrar_count = encontrar_count + 1';
+        break;
+      case 'recrutamento':
+        updateQuery += ', recrutamento_count = recrutamento_count + 1';
+        break;
+      case 'verificacao':
+        updateQuery += ', verificacao_count = verificacao_count + 1';
+        break;
+      case 'suporte':
+        updateQuery += ', suporte_count = suporte_count + 1';
+        break;
+    }
+
+    updateQuery += ' WHERE user_id = $2';
+    await pgClient.query(updateQuery, updateParams);
+
+    console.log(`Pontos multi-servidor: ${username} (+${points} pontos por ${activityType})`);
+  } catch (error) {
+    console.error('Erro ao adicionar pontos multi-servidor:', error);
+    throw error;
+  }
+}
+
 // Função para criar ou atualizar usuário na tabela de pontos
 async function createOrUpdateUserPoints(userId, username) {
   try {
@@ -1097,7 +1158,7 @@ client.once('ready', async () => {
       description: 'Desbloqueia o canal atual para todos os membros',
     },
     {
-      name: 'rec-maker',
+      name: 'rec-staff',
       description: 'Adiciona cargos de maker ao usuário',
       options: [
         {
@@ -1147,6 +1208,30 @@ client.once('ready', async () => {
           type: 5, // BOOLEAN
           description: 'Usar fundo escuro na postagem',
           required: false,
+        },
+      ],
+    },
+    {
+      name: 'solicitarban',
+      description: 'Solicita o banimento de um usuário',
+      options: [
+        {
+          name: 'usuario',
+          type: 6, // USER
+          description: 'ID do usuário para banir',
+          required: true,
+        },
+        {
+          name: 'anexo',
+          type: 11, // ATTACHMENT
+          description: 'Prova/evidência para o banimento',
+          required: true,
+        },
+        {
+          name: 'motivo',
+          type: 3, // STRING
+          description: 'Motivo do banimento',
+          required: true,
         },
       ],
     },
@@ -1308,6 +1393,15 @@ client.once('ready', async () => {
   });
 
   console.log('Sistema de anúncio da postagem mais curtida da semana configurado para sábados às 18:00 (BRT)');
+
+  // Agendamento para verificação de perfis /gifs - todo sábado às 10:00 (BRT)
+  cron.schedule('0 10 * * 6', async () => {
+    await verificarPerfilsGifs();
+  }, {
+    timezone: "America/Sao_Paulo"
+  });
+
+  console.log('Sistema de verificação de perfis /gifs configurado para sábados às 10:00 (BRT)');
 });
 
 // Mapa para controlar cooldown de menções
@@ -1449,7 +1543,7 @@ async function registerFeedback(threadId, userId, rating, assignment) {
     // Salvar feedback no banco de dados
     await pgClient.query(
       'INSERT INTO staff_feedback (staff_id, user_id, rating, thread_type, thread_id, is_automatic) VALUES ($1, $2, $3, $4, $5, $6)',
-      [staffId, userId === 'auto' ? null : userId, rating, threadType, threadId, isAutomatic]
+      [staffId, userId === 'auto' ? '0' : userId, rating, threadType, threadId, isAutomatic]
     );
 
     feedbackGiven.add(threadId);
@@ -1545,6 +1639,118 @@ ${objetivo}
 
   } catch (error) {
     console.error('Erro ao finalizar ticket:', error);
+  }
+}
+
+// Função para verificar perfis /gifs automaticamente
+async function verificarPerfilsGifs() {
+  try {
+    console.log('Iniciando verificação automática de perfis /gifs...');
+    
+    // Buscar todos os usuários que usaram o comando !gifs
+    const result = await pgClient.query('SELECT user_id, username FROM gifs_users');
+    const gifsUsers = result.rows;
+    
+    if (gifsUsers.length === 0) {
+      console.log('Nenhum usuário para verificar.');
+      return;
+    }
+
+    const guild = client.guilds.cache.get('953748240589787136'); // ID do servidor principal
+    if (!guild) {
+      console.log('Servidor principal não encontrado');
+      return;
+    }
+
+    const gifsRoleId = '1399533593360990421';
+    let removidos = 0;
+    let mantidos = 0;
+    let erros = 0;
+    const relatorio = [];
+
+    for (const userData of gifsUsers) {
+      try {
+        // Buscar o usuário no Discord
+        const user = await client.users.fetch(userData.user_id);
+        const member = await guild.members.fetch(userData.user_id).catch(() => null);
+        
+        if (!member) {
+          // Usuário não está mais no servidor, remover da tabela
+          await pgClient.query('DELETE FROM gifs_users WHERE user_id = $1', [userData.user_id]);
+          relatorio.push(`${userData.username} - Removido da tabela (não está no servidor)`);
+          continue;
+        }
+
+        // Verificar se o usuário ainda tem /gifs na descrição/bio do perfil
+        const fetchedUser = await client.users.fetch(userData.user_id, { force: true });
+        const userBio = fetchedUser.bio || '';
+        const hasGifsInProfile = userBio.includes('/gifs');
+        
+        // Atualizar status no banco
+        await pgClient.query(
+          'UPDATE gifs_users SET last_checked = CURRENT_TIMESTAMP, has_gifs_in_profile = $1 WHERE user_id = $2',
+          [hasGifsInProfile, userData.user_id]
+        );
+
+        if (!hasGifsInProfile) {
+          // Usuário não tem mais /gifs no perfil, remover cargo
+          if (member.roles.cache.has(gifsRoleId)) {
+            await member.roles.remove(gifsRoleId);
+            console.log(`Cargo /gifs removido de ${user.username} (${user.id})`);
+          }
+          
+          // Remover da tabela
+          await pgClient.query('DELETE FROM gifs_users WHERE user_id = $1', [userData.user_id]);
+          relatorio.push(`${userData.username} - Cargo removido (sem /gifs no perfil)`);
+          removidos++;
+        } else {
+          relatorio.push(`${userData.username} - Mantido (tem /gifs no perfil)`);
+          mantidos++;
+        }
+
+        // Delay entre verificações para não sobrecarregar a API
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+      } catch (error) {
+        console.error(`Erro ao verificar usuário ${userData.username}:`, error);
+        relatorio.push(`${userData.username} - Erro na verificação`);
+        erros++;
+      }
+    }
+
+    // Enviar relatório no canal de logs (caso exista)
+    const logChannelId = '1218390839722639461'; // Canal de suporte como exemplo
+    const logChannel = client.channels.cache.get(logChannelId);
+    
+    if (logChannel) {
+      const relatorioEmbed = new EmbedBuilder()
+        .setTitle('📊 RELATÓRIO DE VERIFICAÇÃO /GIFS')
+        .setDescription(`
+**Verificação automática realizada com sucesso!**
+
+**📈 ESTATÍSTICAS:**
+• **Verificados:** ${gifsUsers.length} usuários
+• **Cargos removidos:** ${removidos}
+• **Cargos mantidos:** ${mantidos} 
+• **Erros:** ${erros}
+
+**📋 DETALHAMENTO:**
+${relatorio.slice(0, 20).join('\n')}
+${relatorio.length > 20 ? `\n*... e mais ${relatorio.length - 20} verificações*` : ''}
+
+**Data:** ${new Date().toLocaleString('pt-BR')}
+`)
+        .setColor('#4169e1')
+        .setFooter({ text: 'SISTEMA DE VERIFICAÇÃO /GIFS' })
+        .setTimestamp();
+
+      await logChannel.send({ embeds: [relatorioEmbed] });
+    }
+
+    console.log(`Verificação concluída: ${removidos} removidos, ${mantidos} mantidos, ${erros} erros`);
+    
+  } catch (error) {
+    console.error('Erro na verificação automática de perfis /gifs:', error);
   }
 }
 
@@ -1688,54 +1894,70 @@ Esta foi a postagem que mais recebeu curtidas na última semana:
 }
 
 client.on('messageCreate', async message => {
-  // Sistema de pontos automático por mensagens em canais específicos
-  if (!message.author.bot && message.member) {
-    // Configuração de canais que dão pontos e quantos pontos cada um dá
-    const pontosCanais = {
-      // SUBSTITUA PELOS IDs CORRETOS DOS SEUS CANAIS:
-      
-      // Canais de entregas - 2 pontos (substitua pelos IDs dos seus canais de entrega)
-      '1329894823821312021': { tipo: 'entregas', pontos: 2 },
-      '1329894823821312021': { tipo: 'entregas', pontos: 2 },
-      
-      // Canais VIP - 4 pontos (substitua pelos IDs dos seus canais VIP)
-      '1329894869421920390': { tipo: 'vip', pontos: 4 },
-      
-      // Canais de edição - 3 pontos
-      '1329894956503924839': { tipo: 'edicao', pontos: 3 }, // este já estava no código
-      
-      // Canais de suporte - 1 ponto  
-      '1218390839722639461': { tipo: 'suporte', pontos: 1 }, // este já estava no código
-      
-      // Adicione mais canais conforme necessário:
-      // 'ID_DO_CANAL': { tipo: 'tipo_atividade', pontos: quantidade },
-    };
+  // Sistema de pontos automático multi-servidor
+  if (!message.author.bot) {
+    // Servidor Maker (1182331070750933073)
+    if (message.guild.id === '1182331070750933073') {
+      const pontosCanaisMaker = {
+        '1329894823821312021': { tipo: 'entregas', pontos: 2 },
+        '1329894869421920390': { tipo: 'vip', pontos: 4 },
+        '1329894956503924839': { tipo: 'edicao', pontos: 3 },
+        '1329894991937540116': { tipo: 'encontrar', pontos: 1 },
+        '1269870523450527918': { tipo: 'recrutamento', pontos: 1 },
+        '1392273829916704979': { tipo: 'verificacao', pontos: 1 }
+      };
 
-    const canalConfig = pontosCanais[message.channel.id];
-    
-    if (canalConfig) {
-      try {
-        // Verificar se o usuário tem permissão para ganhar pontos neste canal
-        const isStaff = message.member.roles.cache.has('1094385139976507523'); // Staff role
-        const isMaker = message.member.roles.cache.has('1065441764460199967'); // Maker role
-        const isPostador = message.member.roles.cache.has('1072027317297229875'); // Postador role
-        
-        // Permitir pontos apenas para staff, makers ou postadores
-        if (isStaff || isMaker || isPostador) {
-          await addPoints(
+      const canalConfig = pontosCanaisMaker[message.channel.id];
+      
+      if (canalConfig) {
+        try {
+          await addMultiServerPoints(
             message.author.id,
-            message.member.displayName || message.author.username,
+            message.author.username,
             canalConfig.tipo,
             canalConfig.pontos,
             message.channel.id,
             message.id,
-            `Mensagem enviada no canal ${message.channel.name}`
+            `Mensagem no servidor maker - ${message.channel.name}`
           );
           
-          console.log(`Pontos adicionados: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
+          console.log(`Pontos servidor maker: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
+        } catch (error) {
+          console.error('Erro ao adicionar pontos servidor maker:', error);
         }
-      } catch (error) {
-        console.error('Erro ao adicionar pontos por mensagem:', error);
+      }
+    }
+    
+    // Sistema antigo para servidor principal (manter compatibilidade)
+    if (message.guild.id === '953748240589787136' && message.member) {
+      const pontosCanais = {
+        '1218390839722639461': { tipo: 'suporte', pontos: 1 }
+      };
+
+      const canalConfig = pontosCanais[message.channel.id];
+      
+      if (canalConfig) {
+        try {
+          const isStaff = message.member.roles.cache.has('1094385139976507523');
+          const isMaker = message.member.roles.cache.has('1065441764460199967');
+          const isPostador = message.member.roles.cache.has('1072027317297229875');
+          
+          if (isStaff || isMaker || isPostador) {
+            await addPoints(
+              message.author.id,
+              message.member.displayName || message.author.username,
+              canalConfig.tipo,
+              canalConfig.pontos,
+              message.channel.id,
+              message.id,
+              `Mensagem enviada no canal ${message.channel.name}`
+            );
+            
+            console.log(`Pontos adicionados: ${message.author.username} (+${canalConfig.pontos} por ${canalConfig.tipo})`);
+          }
+        } catch (error) {
+          console.error('Erro ao adicionar pontos por mensagem:', error);
+        }
       }
     }
   }
@@ -2544,8 +2766,461 @@ Selecione uma área para acessar suas funções específicas:
     await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
   }
 
-  // Comando !pontos
-  if (message.content.startsWith('!pontos')) {
+  // Comando !pontos (novo sistema multi-servidor)
+  if (message.content === '!pontos') {
+    const userId = message.author.id;
+    
+    try {
+      // Buscar dados do usuário no servidor principal
+      const mainGuild = client.guilds.cache.get('953748240589787136');
+      const makerGuild = client.guilds.cache.get('1182331070750933073');
+      
+      if (!mainGuild) {
+        return message.reply('❌ Servidor principal não encontrado.');
+      }
+
+      const mainMember = await mainGuild.members.fetch(userId).catch(() => null);
+      
+      if (!mainMember) {
+        return message.reply('❌ Você não está no servidor principal.');
+      }
+
+      // Verificar cargos no servidor principal
+      const hasMakerRole = mainMember.roles.cache.has('1224755216038236232');
+      const hasRecruitmentRole = mainMember.roles.cache.has('1230677503719374990');
+      const hasVerificationRole = mainMember.roles.cache.has('1392247839857315912');
+      const hasSupportRole = mainMember.roles.cache.has('1165308513355046973');
+
+      // Buscar pontos do usuário
+      const userPoints = await getUserPoints(userId);
+      
+      if (!userPoints) {
+        await createOrUpdateUserPoints(userId, mainMember.displayName || mainMember.user.username);
+        const newUserEmbed = new EmbedBuilder()
+          .setTitle('📊 ESTATÍSTICAS DE PONTOS')
+          .setDescription(`
+**Usuário:** ${mainMember.displayName || mainMember.user.username}
+**ID:** ${userId}
+
+**Função:** Usuário registrado
+**Pontos Totais:** 0
+
+*Usuário registrado no sistema de pontos!*
+`)
+          .setColor('#9c41ff')
+          .setThumbnail(mainMember.user.displayAvatarURL({ dynamic: true }))
+          .setTimestamp();
+
+        return message.reply({ embeds: [newUserEmbed] });
+      }
+
+      // Determinar função do usuário
+      let userFunction = 'Membro';
+      let statsEmbed;
+
+      if (hasMakerRole) {
+        // Embed para Makers
+        const entregasPontos = userPoints.entregas_count * 2;
+        const vipPontos = userPoints.vip_count * 4;
+        const edicaoPontos = userPoints.edicao_count * 3;
+        const encontrarPontos = userPoints.encontrar_count * 1;
+        const totalEntregas = userPoints.entregas_count + userPoints.vip_count + userPoints.edicao_count + userPoints.encontrar_count;
+
+        statsEmbed = new EmbedBuilder()
+          .setTitle('📊 ESTATÍSTICAS DE PONTOS')
+          .setDescription(`
+**Nickname:** ${userPoints.username}
+**ID:** ${userId}
+
+**Função:** GIF Maker
+
+**📈 ENTREGAS REALIZADAS:**
+• **Entregas:** ${userPoints.entregas_count} (${entregasPontos} pontos)
+• **VIP:** ${userPoints.vip_count} (${vipPontos} pontos)  
+• **Edição:** ${userPoints.edicao_count} (${edicaoPontos} pontos)
+• **Encontrar:** ${userPoints.encontrar_count} (${encontrarPontos} pontos)
+
+**RESUMO:**
+• **Total de Entregas:** ${totalEntregas}
+• **Total de Pontos:** ${userPoints.total_points}
+
+**Última atualização:** ${new Date(userPoints.last_updated).toLocaleDateString('pt-BR')}
+`)
+          .setColor('#00ff88')
+          .setThumbnail(mainMember.user.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'Sistema de Pontos GIFZADA' })
+          .setTimestamp();
+
+      } else if (hasRecruitmentRole) {
+        // Embed para Recrutamento
+        let recruitmentStats = `
+**Nickname:** ${userPoints.username}
+**ID:** ${userId}
+
+**Função:** Recrutamento
+
+**ATIVIDADES REALIZADAS:**
+• **Recrutamentos:** ${userPoints.recrutamento_count}`;
+
+        if (hasVerificationRole) {
+          recruitmentStats += `\n• **Verificação:** ${userPoints.verificacao_count}`;
+        }
+
+        if (hasSupportRole) {
+          recruitmentStats += `\n• **Suportes:** ${userPoints.suporte_count}`;
+        }
+
+        recruitmentStats += `\n\n** RESUMO:**
+• **Total de Pontos:** ${userPoints.total_points}
+
+**Última atualização:** ${new Date(userPoints.last_updated).toLocaleDateString('pt-BR')}`;
+
+        statsEmbed = new EmbedBuilder()
+          .setTitle('ESTATÍSTICAS DE PONTOS')
+          .setDescription(recruitmentStats)
+          .setColor('#7289DA')
+          .setThumbnail(mainMember.user.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'Sistema de Pontos GIFZADA' })
+          .setTimestamp();
+
+      } else {
+        // Embed padrão para outros usuários
+        statsEmbed = new EmbedBuilder()
+          .setTitle('ESTATÍSTICAS DE PONTOS')
+          .setDescription(`
+**Nickname:** ${userPoints.username}
+**ID:** ${userId}
+
+**Função:** Membro
+
+**RESUMO:**
+• **Total de Pontos:** ${userPoints.total_points}
+
+**Última atualização:** ${new Date(userPoints.last_updated).toLocaleDateString('pt-BR')}
+`)
+          .setColor('#9c41ff')
+          .setThumbnail(mainMember.user.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'Sistema de Pontos GIFZADA' })
+          .setTimestamp();
+      }
+
+      await message.reply({ embeds: [statsEmbed] });
+
+    } catch (error) {
+      console.error('Erro no comando !pontos:', error);
+      await message.reply('❌ Erro ao buscar as estatísticas. Tente novamente.');
+    }
+    return;
+  }
+
+  // Comando !pontos reset (apenas administradores)
+  if (message.content === '!pontos reset') {
+    const adminRoles = ['1385756391284805713', '1065441743379628043', '1065441744726020126', '1386493660010516693', '1317652394351525959'];
+    const hasAdminRole = message.member && message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem usar este comando.');
+    }
+
+    try {
+      // Resetar todos os pontos do sistema
+      await pgClient.query('DELETE FROM points_history');
+      await pgClient.query('DELETE FROM user_points');
+
+      const resetEmbed = new EmbedBuilder()
+        .setTitle('🔄 SISTEMA DE PONTOS RESETADO')
+        .setDescription(`
+**Sistema completamente resetado!**
+
+✅ **Ações realizadas:**
+• Todos os pontos foram zerados
+• Histórico de atividades limpo
+• Rankings resetados
+• Contadores reiniciados
+
+**Resetado por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+> 🔄 *O sistema está pronto para começar do zero*
+`)
+        .setColor('#ff6b6b')
+        .setFooter({ text: 'SISTEMA DE PONTOS GIFZADA' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [resetEmbed] });
+      
+      console.log(`Sistema de pontos resetado por ${message.author.username} (${message.author.id})`);
+    } catch (error) {
+      console.error('Erro ao resetar sistema de pontos:', error);
+      await message.reply('❌ Erro ao resetar sistema de pontos. Tente novamente.');
+    }
+    return;
+  }
+
+  // Comando !gifzada
+  if (message.content === '!gifzada') {
+    try {
+      const userId = message.author.id;
+      const user = message.author;
+      
+      // Função para verificar bio com múltiplas tentativas
+      const checkBioWithRetries = async (maxRetries = 3) => {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            console.log(`[TENTATIVA ${attempt}/${maxRetries}] Buscando perfil de ${user.username} (${userId})`);
+            
+            // Limpar cache antes de buscar novamente
+            client.users.cache.delete(userId);
+            
+            // Buscar perfil com cache forçado
+            const fetchedUser = await client.users.fetch(userId, { 
+              force: true,
+              cache: false 
+            });
+            
+            // Aguardar baseado na tentativa (mais tempo a cada tentativa)
+            const waitTime = attempt * 2000; // 2s, 4s, 6s
+            console.log(`[TENTATIVA ${attempt}] Aguardando ${waitTime}ms para sincronização...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Verificar bio
+            const userBio = fetchedUser.bio || '';
+            console.log(`[TENTATIVA ${attempt}] Bio encontrada: "${userBio}"`);
+            console.log(`[TENTATIVA ${attempt}] Tamanho da bio: ${userBio.length} caracteres`);
+            
+            // Verificar se tem /gifs (várias variações)
+            const variations = ['/gifs', '/gif', 'gifs', 'gif'];
+            const foundVariations = [];
+            
+            for (const variation of variations) {
+              if (userBio.toLowerCase().includes(variation.toLowerCase())) {
+                foundVariations.push(variation);
+              }
+            }
+            
+            console.log(`[TENTATIVA ${attempt}] Variações encontradas: [${foundVariations.join(', ')}]`);
+            
+            const hasGifs = foundVariations.length > 0;
+            
+            if (hasGifs || attempt === maxRetries) {
+              return {
+                hasGifs,
+                bio: userBio,
+                foundVariations,
+                attempt
+              };
+            }
+            
+            console.log(`[TENTATIVA ${attempt}] /gifs não encontrado, tentando novamente...`);
+            
+          } catch (error) {
+            console.error(`[TENTATIVA ${attempt}] Erro ao buscar perfil:`, error);
+            if (attempt === maxRetries) {
+              throw error;
+            }
+          }
+        }
+      };
+      
+      console.log(`\n=== INICIANDO VERIFICAÇÃO DE BIO PARA ${user.username} ===`);
+      const bioCheck = await checkBioWithRetries(3);
+      console.log(`=== RESULTADO FINAL: ${bioCheck.hasGifs ? 'ENCONTRADO' : 'NÃO ENCONTRADO'} ===\n`);
+      
+      if (!bioCheck.hasGifs) {
+        const errorEmbed = new EmbedBuilder()
+          .setTitle(' **REQUISITO NÃO ATENDIDO**')
+          .setDescription(`
+**Para receber o cargo, você precisa ter \`/gifs\` no seu "sobre mim" do Discord!**
+
+** COMO FAZER:**
+1. Vá nas configurações do Discord (⚙️)
+2. Clique em "Profile" (Perfil) ou "Perfil"
+3. Edite a seção "About me" (Sobre mim)
+4. Adicione exatamente \`/gifs\` na descrição
+5. Salve as alterações
+6. **REINICIE o Discord completamente**
+7. Aguarde 3-5 minutos
+8. Use o comando novamente
+
+** IMPORTANTE:**
+• Use o perfil **GLOBAL** (não do servidor)
+• O texto deve ser exatamente \`/gifs\` (com barra)
+• Pode estar em qualquer parte da descrição
+• **REINICIAR o Discord é essencial** para sincronizar
+• Se ainda não funcionar, aguarde mais tempo
+
+**📊 DIAGNÓSTICO DA VERIFICAÇÃO:**
+• **Tentativas realizadas:** ${bioCheck.attempt}/3
+• **Bio atual detectada:** 
+\`\`\`
+${bioCheck.bio || 'Nenhuma descrição encontrada'}
+\`\`\`
+• **Tamanho:** ${bioCheck.bio ? bioCheck.bio.length : 0} caracteres
+• **Variações buscadas:** /gifs, /gif, gifs, gif
+• **Status:** ❌ Nenhuma variação encontrada
+
+**🔧 SOLUÇÕES:**
+1. **Reinicie o Discord** (importante!)
+2. Aguarde 5 minutos após adicionar /gifs
+3. Certifique-se que está no perfil GLOBAL
+4. Tente usar exatamente: \`/gifs\`
+`)
+          .setColor('#ff4444')
+          .setFooter({ text: 'SISTEMA /GIFS GIFZADA' })
+          .setTimestamp();
+
+        return message.reply({ embeds: [errorEmbed] });
+      }
+
+      console.log(`Bio verificada com sucesso para ${user.username}: "${bioCheck.bio}"`);
+      console.log(`Variações /gifs encontradas: [${bioCheck.foundVariations.join(', ')}]`);
+      
+      // Verificar se o usuário já possui o cargo
+      const gifsRoleId = '1399533593360990421';
+      const member = message.member;
+      
+      if (member.roles.cache.has(gifsRoleId)) {
+        return message.reply(' Você já possui o cargo `GIFZADA`!');
+      }
+
+      // Adicionar o cargo
+      await member.roles.add(gifsRoleId);
+
+      // Salvar no banco de dados para monitoramento
+      await pgClient.query(`
+        INSERT INTO gifs_users (user_id, username, granted_at, last_checked, has_gifs_in_profile)
+        VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+          username = $2,
+          granted_at = CURRENT_TIMESTAMP,
+          last_checked = CURRENT_TIMESTAMP,
+          has_gifs_in_profile = TRUE
+      `, [userId, user.username]);
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('🎉 **CARGO /GIFS CONCEDIDO!**')
+        .setDescription(`
+**Parabéns ${user}!**
+
+✅ **Cargo concedido:** <@&${gifsRoleId}>
+🎯 **Perfil verificado:** Sobre mim contém /gifs
+📅 **Concedido em:** ${new Date().toLocaleString('pt-BR')}
+📝 **Bio detectada:** "${bioCheck.bio}"
+🔍 **Variações encontradas:** ${bioCheck.foundVariations.join(', ')}
+📊 **Verificado na tentativa:** ${bioCheck.attempt}/3
+
+**📋 INFORMAÇÕES IMPORTANTES:**
+• Mantenha \`/gifs\` no "sobre mim" do seu perfil global
+• **Verificação automática:** Todo sábado às 10h
+• Se remover \`/gifs\` da descrição, o cargo será removido automaticamente
+• Para manter o cargo, sempre tenha \`/gifs\` visível na descrição
+
+**💡 DICA:** Você pode personalizar sua descrição, mas sempre mantenha \`/gifs\` em qualquer lugar!
+
+> 🔄 *Sistema de monitoramento ativo*
+`)
+        .setColor('#00ff88')
+        .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+        .setFooter({ text: 'SISTEMA /GIFS GIFZADA' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [successEmbed] });
+      
+      console.log(`✅ CARGO /GIFS CONCEDIDO: ${user.username} (${userId})`);
+      console.log(`   Bio: "${bioCheck.bio}"`);
+      console.log(`   Variações: [${bioCheck.foundVariations.join(', ')}]`);
+      console.log(`   Tentativa: ${bioCheck.attempt}/3\n`);
+      
+    } catch (error) {
+      console.error('❌ ERRO no comando !gifzada:', error);
+      console.log(`   Usuário: ${user.username} (${userId})`);
+      console.log(`   Erro: ${error.message}\n`);
+      await message.reply(`❌ Erro ao processar comando: ${error.message}\n\n🔧 **Soluções:**\n• Reinicie o Discord completamente\n• Aguarde 5 minutos após adicionar /gifs na bio\n• Tente novamente`);
+    }
+    return;
+  }
+
+  // Comando !pontosranking
+  if (message.content === '!pontosranking') {
+    try {
+      const ranking = await getPointsRanking(20); // Top 20
+      
+      if (ranking.length === 0) {
+        return message.reply(' Nenhum usuário com pontos registrados ainda.');
+      }
+
+      let rankingText = '';
+      
+      for (let i = 0; i < ranking.length; i++) {
+        const user = ranking[i];
+        let medal = '';
+        
+        if (i === 0) medal = '🥇';
+        else if (i === 1) medal = '🥈';
+        else if (i === 2) medal = '🥉';
+        else medal = `**${i + 1}º**`;
+        
+        // Calcular total de atividades
+        const totalAtividades = user.entregas_count + user.vip_count + user.edicao_count + 
+                               user.encontrar_count + user.recrutamento_count + 
+                               user.verificacao_count + user.suporte_count;
+        
+        rankingText += `${medal} **${user.username}**\n`;
+        rankingText += `📊 **${user.total_points} pontos** • ${totalAtividades} atividades\n`;
+        
+        // Mostrar detalhamento das atividades principais
+        let atividades = [];
+        if (user.entregas_count > 0) atividades.push(`Entregas: ${user.entregas_count}`);
+        if (user.vip_count > 0) atividades.push(`VIP: ${user.vip_count}`);
+        if (user.edicao_count > 0) atividades.push(`Edição: ${user.edicao_count}`);
+        if (user.encontrar_count > 0) atividades.push(`Encontrar: ${user.encontrar_count}`);
+        if (user.recrutamento_count > 0) atividades.push(`Recrutamento: ${user.recrutamento_count}`);
+        if (user.verificacao_count > 0) atividades.push(`Verificação: ${user.verificacao_count}`);
+        if (user.suporte_count > 0) atividades.push(`Suporte: ${user.suporte_count}`);
+        
+        if (atividades.length > 0) {
+          rankingText += `└ ${atividades.slice(0, 3).join(' • ')}${atividades.length > 3 ? '...' : ''}\n`;
+        }
+        
+        rankingText += '\n';
+      }
+
+      const rankingEmbed = new EmbedBuilder()
+        .setTitle('🏆 RANKING COMPLETO DE PONTOS')
+        .setDescription(`
+**TOP ${ranking.length} USUÁRIOS COM MAIS PONTOS**
+
+${rankingText}
+
+**📈 SISTEMA DE PONTUAÇÃO:**
+• **Entregas:** 2 pontos cada
+• **VIP:** 4 pontos cada
+• **Edição:** 3 pontos cada
+• **Encontrar:** 1 ponto cada
+• **Recrutamento:** 1 ponto cada
+• **Verificação:** 1 ponto cada
+• **Suporte:** 1 ponto cada
+
+> 💡 *Use \`!pontos\` para ver suas estatísticas detalhadas*
+`)
+        .setColor('#FFD700')
+        .setFooter({ 
+          text: `Sistema de Pontos GIFZADA • Atualizado em ${new Date().toLocaleDateString('pt-BR')}` 
+        })
+        .setTimestamp();
+
+      await message.reply({ embeds: [rankingEmbed] });
+      
+    } catch (error) {
+      console.error('Erro no comando !pontosranking:', error);
+      await message.reply('❌ Erro ao buscar ranking de pontos. Tente novamente.');
+    }
+    return;
+  }
+
+  // Comando !pontos antigo (manter compatibilidade)
+  if (message.content.startsWith('!pontos ')) {
     const args = message.content.split(' ');
     let targetUser = message.author;
 
@@ -2675,13 +3350,13 @@ Selecione uma área para acessar suas funções específicas:
 
 **Pontos Totais:** ${userPoints.total_points}
 
-**📈 ATIVIDADES DE MAKER:**
+**ATIVIDADES DE MAKER:**
 • **Entregas:** ${userPoints.entregas_count} (${entregasPontos} pontos)
 • **VIP:** ${userPoints.vip_count} (${vipPontos} pontos)
 • **Edição:** ${userPoints.edicao_count} (${edicaoPontos} pontos)
 • **Encontrar:** ${userPoints.encontrar_count} (${encontrarPontos} pontos)
 
-**👥 ATIVIDADES DE STAFF:**
+**ATIVIDADES DE STAFF:**
 • **Recrutamento:** ${userPoints.recrutamento_count} (${recrutamentoPontos} pontos)
 • **Verificação:** ${userPoints.verificacao_count} (${verificacaoPontos} pontos)
 • **Suporte:** ${userPoints.suporte_count} (${suportePontos} pontos)
@@ -2804,7 +3479,7 @@ client.on('interactionCreate', async interaction => {
       }
     }
 
-    if (commandName === 'rec-maker') {
+    if (commandName === 'rec-staff') {
       // Verificar se é staff
       const staffRoleId = '1094385139976507523';
       const hasStaffRole = member.roles.cache.has(staffRoleId);
@@ -2827,17 +3502,18 @@ client.on('interactionCreate', async interaction => {
       }
 
       const confirmEmbed = new EmbedBuilder()
-        .setTitle('📋 Confirmação de Recrutamento - MAKER')
+        .setTitle('Confirmação de Recrutamento - STAFF')
         .setDescription(`
 **Confirme abaixo os dados antes de setar o cargo**
 
 **Usuário:** ${targetUser.username} (${targetUser})
 
 **Cargos que serão adicionados:**
+• <@&1065441749947928656>
 • <@&1065441764460199967>
-• <@&1065441761171869796>
-• <@&1072027317297229875>
+• <@&1094385139976507523>
 • <@&1224755216038236232>
+• <@&1072027317297229875>
 `)
         .setColor('#9c41ff')
         .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
@@ -2884,7 +3560,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       const confirmEmbed = new EmbedBuilder()
-        .setTitle('📋 Confirmação de Recrutamento - POSTADOR')
+        .setTitle('Confirmação de Recrutamento - POSTADOR')
         .setDescription(`
 **Confirme abaixo os dados antes de setar o cargo**
 
@@ -2938,7 +3614,7 @@ client.on('interactionCreate', async interaction => {
 
         // Não enviar resposta ao usuário (fazer dismiss silencioso)
         await interaction.editReply({
-          content: '✅ Postagem enviada!',
+          content: 'Postagem enviada!',
         });
 
         // Deletar a resposta após 500ms
@@ -2948,12 +3624,134 @@ client.on('interactionCreate', async interaction => {
           } catch (error) {
             console.log('Resposta já foi deletada ou expirou');
           }
-        }, 500);
+        }, 100);
 
       } catch (error) {
         console.error('Erro ao criar postagem:', error);
         await interaction.editReply({
           content: '❌ Erro ao criar a postagem. Tente novamente.',
+        });
+      }
+    }
+
+    if (commandName === 'solicitarban') {
+      // Verificar se está no canal correto
+      if (interaction.channel.id !== '1399541233650499785') {
+        return interaction.reply({
+          content: '❌ Este comando só pode ser usado no canal específico para solicitações de ban.',
+          flags: 1 << 6
+        });
+      }
+
+      const targetUser = options.getUser('usuario');
+      const anexo = options.getAttachment('anexo');
+      const motivo = options.getString('motivo');
+
+      try {
+        // Criar ID único para a solicitação
+        const solicitacaoId = `ban_${Date.now()}_${interaction.user.id}`;
+
+        // Embed para confirmação de envio
+        const confirmEmbed = new EmbedBuilder()
+          .setTitle('✅ **SOLICITAÇÃO ENVIADA**')
+          .setDescription(`
+**Sua solicitação de banimento foi enviada com sucesso!**
+
+**Usuário relatado:** ${targetUser}
+**Motivo:** ${motivo}
+**Solicitado por:** ${interaction.user}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+> 📋 *Sua solicitação está sendo analisada pela administração.*
+`)
+          .setColor('#ffaa00')
+          .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+          .setTimestamp();
+
+        const verProvaButton = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ver_prova_solicitacao_${solicitacaoId}`)
+            .setLabel('Ver Prova')
+            .setEmoji('📎')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        await interaction.reply({ 
+          embeds: [confirmEmbed], 
+          components: [verProvaButton], 
+          flags: 1 << 6 
+        });
+
+        // Enviar para canal de análise
+        const analiseChannel = client.channels.cache.get('1399542249682895040');
+        
+        if (analiseChannel) {
+          const analiseEmbed = new EmbedBuilder()
+            .setTitle('🚨 **NOVA SOLICITAÇÃO DE BANIMENTO**')
+            .setDescription(`
+**Usuário para banir:** ${targetUser} (${targetUser.id})
+**Solicitado por:** ${interaction.user}
+**Canal:** ${interaction.channel}
+
+**Motivo:**
+\`\`\`
+${motivo}
+\`\`\`
+
+**Data da solicitação:** ${new Date().toLocaleString('pt-BR')}
+**ID da solicitação:** \`${solicitacaoId}\`
+`)
+            .setColor('#ff4444')
+            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+            .setFooter({ text: `Solicitação: ${solicitacaoId}` })
+            .setTimestamp();
+
+          const analiseButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`aprovar_ban_${solicitacaoId}`)
+              .setLabel('Aprovar Banimento')
+              .setEmoji('✅')
+              .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+              .setCustomId(`ver_prova_analise_${solicitacaoId}`)
+              .setLabel('Ver Prova')
+              .setEmoji('📎')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId(`rejeitar_ban_${solicitacaoId}`)
+              .setLabel('Rejeitar Banimento')
+              .setEmoji('❌')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+          await analiseChannel.send({
+            content: `<@&1065441743379628043>`,
+            embeds: [analiseEmbed],
+            components: [analiseButtons]
+          });
+
+          // Salvar dados da solicitação no mapa temporário
+          if (!global.banSolicitations) global.banSolicitations = new Map();
+          global.banSolicitations.set(solicitacaoId, {
+            targetUserId: targetUser.id,
+            targetUserTag: targetUser.tag,
+            requesterId: interaction.user.id,
+            requesterTag: interaction.user.tag,
+            motivo: motivo,
+            anexoUrl: anexo.url,
+            anexoName: anexo.name,
+            channelId: interaction.channel.id,
+            originalMessageId: null, // Será definido após resposta
+            analiseMessageId: null,
+            status: 'pendente'
+          });
+        }
+
+      } catch (error) {
+        console.error('Erro no comando solicitarban:', error);
+        await interaction.reply({
+          content: '❌ Erro ao processar solicitação de banimento. Tente novamente.',
+          flags: 1 << 6
         });
       }
     }
@@ -2967,7 +3765,7 @@ client.on('interactionCreate', async interaction => {
       const blacklistCheck = await isUserBlacklisted(interaction.user.id);
       if (blacklistCheck) {
         return interaction.reply({
-          content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
+          content: `**Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
          flags: 1 << 6
         });
       }
@@ -3886,6 +4684,101 @@ ${detailText}
         await interaction.reply({
           content: '❌ Erro ao buscar estatísticas. Verifique se o ID do staff está correto.',
          flags: 1 << 6
+        });
+      }
+    }
+
+    if (interaction.customId.startsWith('rejeitar_motivo_')) {
+      const solicitacaoId = interaction.customId.replace('rejeitar_motivo_', '');
+      const motivoRejeicao = interaction.fields.getTextInputValue('motivo_rejeicao');
+
+      if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
+        return interaction.reply({
+          content: '❌ Solicitação não encontrada.',
+          flags: 1 << 6
+        });
+      }
+
+      const solicitacao = global.banSolicitations.get(solicitacaoId);
+
+      try {
+        // Atualizar embed de análise
+        const rejectedEmbed = new EmbedBuilder()
+          .setTitle('❌ **BANIMENTO REJEITADO**')
+          .setDescription(`
+**Usuário:** ${solicitacao.targetUserTag} (${solicitacao.targetUserId})
+**Solicitado por:** ${solicitacao.requesterTag}
+**Rejeitado por:** ${interaction.user}
+
+**Motivo original:**
+\`\`\`
+${solicitacao.motivo}
+\`\`\`
+
+**Motivo da rejeição:**
+\`\`\`
+${motivoRejeicao}
+\`\`\`
+
+**Status:** ❌ Solicitação rejeitada
+**Data de rejeição:** ${new Date().toLocaleString('pt-BR')}
+`)
+          .setColor('#ff4444')
+          .setFooter({ text: `Solicitação: ${solicitacaoId}` })
+          .setTimestamp();
+
+        await interaction.update({ embeds: [rejectedEmbed], components: [] });
+
+        // Buscar e atualizar a mensagem original de solicitação
+        try {
+          const originalChannel = client.channels.cache.get(solicitacao.channelId);
+          if (originalChannel) {
+            const messages = await originalChannel.messages.fetch({ limit: 50 });
+            const originalMessage = messages.find(msg => 
+              msg.embeds.length > 0 && 
+              msg.embeds[0].title?.includes('SOLICITAÇÃO ENVIADA')
+            );
+
+            if (originalMessage) {
+              const rejectedOriginalEmbed = new EmbedBuilder()
+                .setTitle('❌ **SOLICITAÇÃO REJEITADA**')
+                .setDescription(`
+**Sua solicitação foi rejeitada pela administração.**
+
+**Usuário relatado:** ${solicitacao.targetUserTag}
+**Motivo original:** ${solicitacao.motivo}
+**Rejeitado por:** ${interaction.user}
+
+**Motivo da rejeição:**
+\`\`\`
+${motivoRejeicao}
+\`\`\`
+
+**Data de rejeição:** ${new Date().toLocaleString('pt-BR')}
+
+> ❌ *A solicitação não foi aprovada conforme os critérios da administração.*
+`)
+                .setColor('#ff4444')
+                .setTimestamp();
+
+              await originalMessage.edit({ embeds: [rejectedOriginalEmbed], components: [] });
+            }
+          }
+        } catch (updateError) {
+          console.error('Erro ao atualizar mensagem original:', updateError);
+        }
+
+        // Atualizar status da solicitação
+        solicitacao.status = 'rejeitado';
+        solicitacao.rejectedBy = interaction.user.id;
+        solicitacao.rejectionReason = motivoRejeicao;
+        global.banSolicitations.set(solicitacaoId, solicitacao);
+
+      } catch (error) {
+        console.error('Erro ao processar rejeição:', error);
+        await interaction.reply({
+          content: '❌ Erro ao processar rejeição.',
+          flags: 1 << 6
         });
       }
     }
@@ -5134,7 +6027,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   const recruitmentRoleId = '1230677503719374990';
   const staffRoleId = '1094385139976507523';
 
-  // Botões de assumir ticket
+  // Botões de assumir ticket (com sistema de pontos)
   if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao', 'assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(customId)) {
     // Verificar permissões específicas por tipo de ticket
     let hasPermission = false;
@@ -5197,6 +6090,34 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
       } catch (error) {
         console.error('Erro ao editar mensagem:', error);
       }
+    }
+
+    // Adicionar pontos silenciosamente baseado no tipo de ticket
+    try {
+      let pontosTipo = '';
+      let pontosValor = 1;
+
+      if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao'].includes(customId)) {
+        pontosTipo = 'recrutamento';
+      } else if (['assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(customId)) {
+        pontosTipo = 'suporte';
+      }
+
+      if (pontosTipo) {
+        await addMultiServerPoints(
+          interaction.user.id,
+          interaction.user.username,
+          pontosTipo,
+          pontosValor,
+          interaction.channel.id,
+          interaction.message.id,
+          `Assumiu ticket de ${pontosTipo}`
+        );
+        
+        console.log(`Pontos por assumir ticket: ${interaction.user.username} (+${pontosValor} por ${pontosTipo})`);
+      }
+    } catch (error) {
+      console.error('Erro ao adicionar pontos por assumir ticket:', error);
     }
 
     const embed = new EmbedBuilder()
@@ -5653,7 +6574,7 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
 
     if (!targetMember) {
       return interaction.reply({
-        content: '❌ Usuário não encontrado no servidor.',
+        content: 'Usuário não encontrado no servidor.',
        flags: 1 << 6
       });
     }
@@ -5661,22 +6582,24 @@ https://discord.com/channels/1182331070750933073/1329894823821312021
     try {
       // Cargos de maker
       const makerRoles = [
-        '1065441764460199967',
-        '1065441761171869796', 
-        '1072027317297229875',
-        '1224755216038236232'
+        '1065441749947928656',
+        '1065441764460199967', 
+        '1094385139976507523',
+        '1224755216038236232',
+        '1072027317297229875'
       ];
 
       await targetMember.roles.add(makerRoles);
 
       const successEmbed = new EmbedBuilder()
-        .setTitle('✅ Recrutamento Concluído - MAKER')
+        .setTitle('Recrutamento Concluído - STAFF')
         .setDescription(`
-**${targetMember.user.username}** foi recrutado como **MAKER** com sucesso!
+**${targetMember.user.username}** foi recrutado como **STAFF** com sucesso!
 
 **Cargos adicionados:**
+• <@&1065441749947928656>
 • <@&1065441764460199967>
-• <@&1065441761171869796>
+• <@&1094385139976507523>
 • <@&1072027317297229875>
 • <@&1224755216038236232>
 
@@ -5874,6 +6797,204 @@ Thread será fechada em alguns segundos...
     setTimeout(async () => {
       await finalizarTicket(interaction, assignment);
     }, 3000);
+  }
+
+  // Handlers para sistema de banimento
+  if (customId.startsWith('ver_prova_solicitacao_')) {
+    const solicitacaoId = customId.replace('ver_prova_solicitacao_', '');
+    
+    if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
+      return interaction.reply({
+        content: '❌ Solicitação não encontrada.',
+        flags: 1 << 6
+      });
+    }
+
+    const solicitacao = global.banSolicitations.get(solicitacaoId);
+    
+    // Verificar se é o autor da solicitação
+    if (interaction.user.id !== solicitacao.requesterId) {
+      return interaction.reply({
+        content: '❌ Apenas quem fez a solicitação pode ver a prova.',
+        flags: 1 << 6
+      });
+    }
+
+    const provaEmbed = new EmbedBuilder()
+      .setTitle('📎 **PROVA ANEXADA**')
+      .setDescription(`**Arquivo:** ${solicitacao.anexoName}`)
+      .setImage(solicitacao.anexoUrl)
+      .setColor('#4169e1')
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [provaEmbed], flags: 1 << 6 });
+  }
+
+  if (customId.startsWith('ver_prova_analise_')) {
+    const solicitacaoId = customId.replace('ver_prova_analise_', '');
+    
+    // Verificar se tem o cargo de administrador
+    if (!interaction.member.roles.cache.has('1065441743379628043')) {
+      return interaction.reply({
+        content: '❌ Apenas administradores podem ver as provas.',
+        flags: 1 << 6
+      });
+    }
+
+    if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
+      return interaction.reply({
+        content: '❌ Solicitação não encontrada.',
+        flags: 1 << 6
+      });
+    }
+
+    const solicitacao = global.banSolicitations.get(solicitacaoId);
+
+    const provaEmbed = new EmbedBuilder()
+      .setTitle('📎 **PROVA ANEXADA**')
+      .setDescription(`
+**Arquivo:** ${solicitacao.anexoName}
+**Solicitado por:** ${solicitacao.requesterTag}
+**Usuário relatado:** ${solicitacao.targetUserTag}
+**Motivo:** ${solicitacao.motivo}
+`)
+      .setImage(solicitacao.anexoUrl)
+      .setColor('#4169e1')
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [provaEmbed], flags: 1 << 6 });
+  }
+
+  if (customId.startsWith('aprovar_ban_')) {
+    const solicitacaoId = customId.replace('aprovar_ban_', '');
+    
+    // Verificar se tem o cargo de administrador
+    if (!interaction.member.roles.cache.has('1065441743379628043')) {
+      return interaction.reply({
+        content: '❌ Apenas administradores podem aprovar banimentos.',
+        flags: 1 << 6
+      });
+    }
+
+    if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
+      return interaction.reply({
+        content: '❌ Solicitação não encontrada.',
+        flags: 1 << 6
+      });
+    }
+
+    const solicitacao = global.banSolicitations.get(solicitacaoId);
+
+    try {
+      // Banir o usuário
+      const targetUser = await client.users.fetch(solicitacao.targetUserId);
+      await interaction.guild.members.ban(solicitacao.targetUserId, { 
+        reason: `Banimento aprovado por ${interaction.user.tag} - Motivo: ${solicitacao.motivo}` 
+      });
+
+      // Atualizar embed de análise
+      const aprovedEmbed = new EmbedBuilder()
+        .setTitle('✅ **BANIMENTO APROVADO E EXECUTADO**')
+        .setDescription(`
+**Usuário banido:** ${solicitacao.targetUserTag} (${solicitacao.targetUserId})
+**Solicitado por:** ${solicitacao.requesterTag}
+**Aprovado por:** ${interaction.user}
+
+**Motivo:**
+\`\`\`
+${solicitacao.motivo}
+\`\`\`
+
+**Status:** ✅ Ban executado com sucesso
+**Data de aprovação:** ${new Date().toLocaleString('pt-BR')}
+`)
+        .setColor('#00ff00')
+        .setFooter({ text: `Solicitação: ${solicitacaoId}` })
+        .setTimestamp();
+
+      await interaction.update({ embeds: [aprovedEmbed], components: [] });
+
+      // Buscar e atualizar a mensagem original de solicitação
+      try {
+        const originalChannel = client.channels.cache.get(solicitacao.channelId);
+        if (originalChannel) {
+          const messages = await originalChannel.messages.fetch({ limit: 50 });
+          const originalMessage = messages.find(msg => 
+            msg.embeds.length > 0 && 
+            msg.embeds[0].title?.includes('SOLICITAÇÃO ENVIADA') &&
+            msg.embeds[0].footer?.text?.includes(solicitacaoId)
+          );
+
+          if (originalMessage) {
+            const concluedEmbed = new EmbedBuilder()
+              .setTitle('✅ **BAN CONCLUÍDO**')
+              .setDescription(`
+**Sua solicitação foi aprovada e executada!**
+
+**Usuário banido:** ${solicitacao.targetUserTag}
+**Motivo:** ${solicitacao.motivo}
+**Aprovado por:** ${interaction.user}
+**Data de conclusão:** ${new Date().toLocaleString('pt-BR')}
+
+> ✅ *O usuário foi banido com sucesso do servidor.*
+`)
+              .setColor('#00ff00')
+              .setTimestamp();
+
+            await originalMessage.edit({ embeds: [concluedEmbed], components: [] });
+          }
+        }
+      } catch (updateError) {
+        console.error('Erro ao atualizar mensagem original:', updateError);
+      }
+
+      // Atualizar status da solicitação
+      solicitacao.status = 'aprovado';
+      solicitacao.approvedBy = interaction.user.id;
+      global.banSolicitations.set(solicitacaoId, solicitacao);
+
+    } catch (banError) {
+      console.error('Erro ao banir usuário:', banError);
+      await interaction.reply({
+        content: `❌ Erro ao executar banimento: ${banError.message}`,
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (customId.startsWith('rejeitar_ban_')) {
+    const solicitacaoId = customId.replace('rejeitar_ban_', '');
+    
+    // Verificar se tem o cargo de administrador
+    if (!interaction.member.roles.cache.has('1065441743379628043')) {
+      return interaction.reply({
+        content: '❌ Apenas administradores podem rejeitar banimentos.',
+        flags: 1 << 6
+      });
+    }
+
+    if (!global.banSolicitations || !global.banSolicitations.has(solicitacaoId)) {
+      return interaction.reply({
+        content: '❌ Solicitação não encontrada.',
+        flags: 1 << 6
+      });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`rejeitar_motivo_${solicitacaoId}`)
+      .setTitle('Motivo da Rejeição');
+
+    const motivoInput = new TextInputBuilder()
+      .setCustomId('motivo_rejeicao')
+      .setLabel('Motivo da rejeição')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Explique por que a solicitação foi rejeitada...')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(motivoInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
   }
 
   // Handler para verificar usuário (apenas staff)
