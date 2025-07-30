@@ -7063,12 +7063,10 @@ Thread será fechada em alguns segundos...
 ${solicitacao.motivo}
 \`\`\`
 
-**Status:** ✅ Solicitação aprovada - **Execute o ban manualmente**
+**Status:** ✅ Solicitação aprovada**
 **Data de aprovação:** ${new Date().toLocaleString('pt-BR')}
-
-> ⚠️ *O banimento deve ser executado manualmente pelo administrador*
 `)
-        .setColor('#ffaa00')
+        .setColor('#00ff00')
         .setFooter({ text: `Solicitação: ${solicitacaoId}` })
         .setTimestamp();
 
