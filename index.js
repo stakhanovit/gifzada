@@ -1,3 +1,5 @@
+
+
 const {
   Client,
   GatewayIntentBits,
@@ -1752,14 +1754,26 @@ ${relatorio.length > 20 ? `\n*... e mais ${relatorio.length - 20} verificações
   }
 }
 
+// Variável para controlar o usuário atual com cargo de destaque
+let currentHighlightUserId = null;
+
 // Função para anunciar a postagem mais curtida da semana
 async function anunciarPostMaisCurtidaDaSemana() {
   try {
     const canalPostsId = '1392228130361708645'; // Canal onde os posts são feitos
+    const canalAnuncioId = '1395858254176849960'; // Canal onde será anunciado o destaque
+    const cargoDestaqueId = '1298128245694402630'; // Cargo de destaque da semana
+    
     const canal = client.channels.cache.get(canalPostsId);
+    const canalAnuncio = client.channels.cache.get(canalAnuncioId);
 
     if (!canal) {
       console.log('Canal de posts não encontrado');
+      return;
+    }
+
+    if (!canalAnuncio) {
+      console.log('Canal de anúncio do destaque não encontrado');
       return;
     }
 
@@ -1798,6 +1812,37 @@ async function anunciarPostMaisCurtidaDaSemana() {
 
     // Buscar o usuário que fez o post
     const autorUser = await client.users.fetch(autorMaisCurtido);
+    const guild = canalAnuncio.guild;
+    const newMember = await guild.members.fetch(autorMaisCurtido).catch(() => null);
+
+    if (!newMember) {
+      console.log('Usuário vencedor não encontrado no servidor');
+      return;
+    }
+
+    // Gerenciar cargos de destaque
+    try {
+      // Remover cargo do usuário anterior (se houver)
+      if (currentHighlightUserId && currentHighlightUserId !== autorMaisCurtido) {
+        const previousMember = await guild.members.fetch(currentHighlightUserId).catch(() => null);
+        if (previousMember && previousMember.roles.cache.has(cargoDestaqueId)) {
+          await previousMember.roles.remove(cargoDestaqueId);
+          console.log(`Cargo de destaque removido do usuário anterior: ${previousMember.user.username}`);
+        }
+      }
+
+      // Adicionar cargo ao novo vencedor
+      if (!newMember.roles.cache.has(cargoDestaqueId)) {
+        await newMember.roles.add(cargoDestaqueId);
+        console.log(`Cargo de destaque adicionado ao novo vencedor: ${autorUser.username}`);
+      }
+
+      // Atualizar o usuário atual com cargo
+      currentHighlightUserId = autorMaisCurtido;
+
+    } catch (cargoError) {
+      console.error('Erro ao gerenciar cargos de destaque:', cargoError);
+    }
 
     // Buscar a mensagem original do post para pegar o anexo
     try {
@@ -1818,24 +1863,25 @@ async function anunciarPostMaisCurtidaDaSemana() {
 
       // Criar embed do anúncio
       const anuncioEmbed = new EmbedBuilder()
-        .setTitle(' POSTAGEM MAIS CURTIDA DA SEMANA!')
+        .setTitle('🏆 DESTAQUE DA SEMANA!')
         .setDescription(`
-** Parabéns para ${autorUser}!**
+**🎉 Parabéns para ${autorUser}!**
 
 Esta foi a postagem que mais recebeu curtidas na última semana:
 
-** Estatísticas:**
+**📊 Estatísticas:**
 • **${maisCurtidas}** curtidas
 • **Autor:** ${autorUser.username}
 • **Data:** Esta semana
+• **Cargo:** <@&${cargoDestaqueId}> adicionado até o próximo sábado
 
-** Continue trazendo conteúdo incrível para nossa comunidade!**
+**🌟 Continue trazendo conteúdo incrível para nossa comunidade!**
 `)
         .setColor('#FFD700')
         .setThumbnail(autorUser.displayAvatarURL({ dynamic: true, size: 256 }))
         .setFooter({ 
-          text: 'GIFZADA - Postagem da Semana', 
-          iconURL: canal.guild.iconURL({ dynamic: true, size: 64 })
+          text: 'GIFZADA - Destaque da Semana', 
+          iconURL: guild.iconURL({ dynamic: true, size: 64 })
         })
         .setTimestamp();
 
@@ -1844,50 +1890,51 @@ Esta foi a postagem que mais recebeu curtidas na última semana:
         anuncioEmbed.setImage(anexoOriginal.url);
       }
 
-      // Enviar anúncio no canal
-      await canal.send({
-        content: ` **DESTAQUE DA SEMANA** \n${autorUser}`,
+      // Enviar anúncio no canal específico
+      await canalAnuncio.send({
+        content: `🏆 **DESTAQUE DA SEMANA** 🏆\n${autorUser}`,
         embeds: [anuncioEmbed]
       });
 
-      console.log(`Anúncio da postagem mais curtida enviado: ${maisCurtidas} curtidas de ${autorUser.username}`);
+      console.log(`Anúncio do destaque da semana enviado: ${maisCurtidas} curtidas de ${autorUser.username}`);
 
     } catch (error) {
       console.error('Erro ao buscar anexo original:', error);
 
       // Enviar anúncio sem anexo em caso de erro
       const anuncioEmbed = new EmbedBuilder()
-        .setTitle(' POSTAGEM MAIS CURTIDA DA SEMANA!')
+        .setTitle('🏆 DESTAQUE DA SEMANA!')
         .setDescription(`
-** Parabéns para ${autorUser}!**
+**🎉 Parabéns para ${autorUser}!**
 
 Esta foi a postagem que mais recebeu curtidas na última semana:
 
-** Estatísticas:**
+**📊 Estatísticas:**
 • **${maisCurtidas}** curtidas
 • **Autor:** ${autorUser.username}
 • **Data:** Esta semana
+• **Cargo:** <@&${cargoDestaqueId}> adicionado até o próximo sábado
 
-** Continue trazendo conteúdo incrível para nossa comunidade!**
+**🌟 Continue trazendo conteúdo incrível para nossa comunidade!**
 `)
         .setColor('#FFD700')
         .setThumbnail(autorUser.displayAvatarURL({ dynamic: true, size: 256 }))
         .setFooter({ 
-          text: 'GIFZADA - Postagem da Semana', 
-          iconURL: canal.guild.iconURL({ dynamic: true, size: 64 })
+          text: 'GIFZADA - Destaque da Semana', 
+          iconURL: guild.iconURL({ dynamic: true, size: 64 })
         })
         .setTimestamp();
 
-      await canal.send({
-        content: ` **DESTAQUE DA SEMANA** \n${autorUser}`,
+      await canalAnuncio.send({
+        content: `🏆 **DESTAQUE DA SEMANA** 🏆\n${autorUser}`,
         embeds: [anuncioEmbed]
       });
 
-      console.log(`Anúncio da postagem mais curtida enviado (sem anexo): ${maisCurtidas} curtidas de ${autorUser.username}`);
+      console.log(`Anúncio do destaque da semana enviado (sem anexo): ${maisCurtidas} curtidas de ${autorUser.username}`);
     }
 
   } catch (error) {
-    console.error('Erro ao anunciar postagem mais curtida da semana:', error);
+    console.error('Erro ao anunciar destaque da semana:', error);
   }
 }
 
