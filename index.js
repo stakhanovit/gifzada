@@ -1,5 +1,3 @@
-
-
 const {
   Client,
   GatewayIntentBits,
@@ -6684,6 +6682,53 @@ GIFs: Todos os tipos (animados e estáticos)
     }
 
     // Verificar se o usuário já tem uma thread de verificação ativa
+    if (activeVerificationThreads.has(user.id)) {
+      const existingThreadId = activeVerificationThreads.get(user.id);
+      const existingThread = client.channels.cache.get(existingThreadId);
+
+      if (existingThread && !existingThread.archived) {
+        return interaction.reply({
+          content: `❌ **Você já possui um processo de verificação ativo!**\n\nAcesse sua thread: ${existingThread}`,
+         flags: 1 << 6
+        });
+      } else {
+        // Se a thread não existe mais ou está arquivada, remover do mapa
+        activeVerificationThreads.delete(user.id);
+      }
+    }
+
+    // Enviar confirmação ephemeral antes de iniciar a verificação
+    const confirmEmbed = new EmbedBuilder()
+      .setTitle('📋 **CONFIRMAÇÃO DE VERIFICAÇÃO**')
+      .setDescription('**ESSA VERIFICAÇÃO É PARA USUARIOS QUE QUEREM PARTICIPAR DO INSTAGRAM DO SERVIDOR, APÓS CLICAR NO BOTÃO ABAIXO, UMA THREAD PRIVADA IRÁ SE ABRIR E O PROCESSO DE VERIFICAÇÃO SE INICIARA**')
+      .setColor('#9c41ff')
+      .setTimestamp();
+
+    const confirmRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('concordo_verificacao')
+        .setLabel('Concordo')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    return interaction.reply({
+      embeds: [confirmEmbed],
+      components: [confirmRow],
+      flags: 1 << 6
+    });
+  }
+
+  // Handler para confirmação de verificação
+  if (customId === 'concordo_verificacao') {
+    // Verificar novamente se o usuário está bloqueado
+    if (blockedVerificationUsers.has(user.id)) {
+      return interaction.reply({
+        content: '🚫 **Você está bloqueado pela administração**\n\nVocê não pode iniciar processos de verificação. Entre em contato com o suporte para mais informações.',
+       flags: 1 << 6
+      });
+    }
+
+    // Verificar novamente se o usuário já tem uma thread de verificação ativa
     if (activeVerificationThreads.has(user.id)) {
       const existingThreadId = activeVerificationThreads.get(user.id);
       const existingThread = client.channels.cache.get(existingThreadId);
