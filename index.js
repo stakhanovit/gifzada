@@ -2218,6 +2218,197 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
     await message.channel.send({ embeds: [embed], components: [row1] });
   }
 
+  // Comando !privatethread
+  if (message.content.startsWith('!privatethread ')) {
+    const staffRoleId = '1230677503719374990';
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasStaffRole = message.member.roles.cache.has(staffRoleId);
+    const hasAdminRole = message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasStaffRole && !hasAdminRole) {
+      return message.reply({
+        content: '❌ Apenas staffs ou administradores podem usar este comando.',
+        flags: 1 << 6
+      });
+    }
+
+    const channelId = message.content.split(' ')[1];
+
+    if (!channelId) {
+      return message.reply({
+        content: '❌ Por favor, forneça o ID do canal.\n**Uso:** `!privatethread [ID_DO_CANAL]`',
+        flags: 1 << 6
+      });
+    }
+
+    const targetChannel = client.channels.cache.get(channelId);
+
+    if (!targetChannel) {
+      return message.reply({
+        content: '❌ Canal não encontrado. Verifique se o ID está correto.',
+        flags: 1 << 6
+      });
+    }
+
+    // Embed de carregamento
+    const loadingEmbed = new EmbedBuilder()
+      .setTitle('🔒 **PRIVATIZANDO THREADS**')
+      .setDescription(`
+**Canal:** ${targetChannel}
+**Status:** Carregando threads...
+
+> ⏳ *Aguarde enquanto analisamos e privatizamos todas as threads do canal...*
+`)
+      .setColor('#ffaa00')
+      .setTimestamp();
+
+    const loadingMessage = await message.reply({ embeds: [loadingEmbed] });
+
+    try {
+      // Buscar todas as threads do canal (ativas e arquivadas)
+      const activeThreads = await targetChannel.threads.fetchActive();
+      const archivedThreads = await targetChannel.threads.fetchArchived();
+
+      // Combinar threads ativas e arquivadas
+      const allThreads = new Map([...activeThreads.threads, ...archivedThreads.threads]);
+
+      let threadsProcessadas = 0;
+      let threadsPrivatizadas = 0;
+      let threadsErros = 0;
+      let threadsJaPrivadas = 0;
+      const threadsDetails = [];
+
+      for (const [threadId, thread] of allThreads) {
+        threadsProcessadas++;
+
+        try {
+          // Verificar se a thread já é privada
+          if (thread.type === 12) { // GUILD_PRIVATE_THREAD
+            threadsJaPrivadas++;
+            threadsDetails.push({
+              name: thread.name,
+              id: threadId,
+              status: 'Já privada'
+            });
+            continue;
+          }
+
+          // Tentar privatizar a thread (só funciona se ela for pública)
+          if (thread.type === 11) { // GUILD_PUBLIC_THREAD
+            // Infelizmente, não é possível converter threads públicas para privadas via API do Discord
+            // Threads são definidas como públicas ou privadas no momento da criação
+            threadsDetails.push({
+              name: thread.name,
+              id: threadId,
+              status: 'Impossível privatizar (já é pública)'
+            });
+          } else {
+            threadsDetails.push({
+              name: thread.name,
+              id: threadId,
+              status: 'Tipo desconhecido'
+            });
+          }
+
+        } catch (error) {
+          console.error(`Erro ao processar thread ${threadId}:`, error);
+          threadsErros++;
+          threadsDetails.push({
+            name: thread.name || 'Thread desconhecida',
+            id: threadId,
+            status: 'Erro ao processar'
+          });
+        }
+      }
+
+      // Criar relatório detalhado
+      let detailsText = '';
+      if (threadsDetails.length > 0) {
+        const sortedDetails = threadsDetails.slice(0, 15);
+        detailsText = sortedDetails.map(thread => 
+          `**${thread.name}** - *${thread.status}*`
+        ).join('\n');
+
+        if (threadsDetails.length > 15) {
+          detailsText += `\n*... e mais ${threadsDetails.length - 15} thread(s)*`;
+        }
+      } else {
+        detailsText = '*Nenhuma thread encontrada*';
+      }
+
+      // Embed final com resultados
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('🔒 **ANÁLISE DE THREADS CONCLUÍDA**')
+        .setDescription(`
+**Canal analisado:** ${targetChannel}
+**Executado por:** ${message.author}
+
+## 📊 **ESTATÍSTICAS:**
+
+\`\`\`yaml
+ Threads Analisadas: ${threadsProcessadas}
+ Já Privadas: ${threadsJaPrivadas}
+ Impossível Privatizar: ${threadsProcessadas - threadsJaPrivadas - threadsErros}
+ Erros: ${threadsErros}
+\`\`\`
+
+## 📋 **DETALHES DAS THREADS:**
+
+${detailsText}
+
+## ⚠️ **IMPORTANTE:**
+> **Limitação da API do Discord:** Não é possível converter threads públicas existentes para privadas. As threads são definidas como públicas ou privadas no momento da criação e não podem ser alteradas posteriormente.
+
+> **Solução:** Para ter threads privadas, elas precisam ser criadas como privadas desde o início usando o parâmetro \`type: 12\` na criação.
+`)
+        .setColor('#ff6b6b')
+        .addFields(
+          { 
+            name: '🔒 **Threads Já Privadas**', 
+            value: `${threadsJaPrivadas} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '🔓 **Threads Públicas**', 
+            value: `${threadsProcessadas - threadsJaPrivadas - threadsErros} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '❌ **Erros**', 
+            value: `${threadsErros} thread(s)`, 
+            inline: true 
+          }
+        )
+        .setFooter({ 
+          text: 'GIFZADA • Sistema de Análise de Threads',
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await loadingMessage.edit({ embeds: [resultEmbed] });
+
+    } catch (error) {
+      console.error('Erro ao processar comando privatethread:', error);
+
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ **ERRO NO PROCESSAMENTO**')
+        .setDescription(`
+**Erro ao analisar threads do canal**
+
+\`\`\`
+${error.message}
+\`\`\`
+
+> ⚠️ *Verifique se o bot tem as permissões necessárias no canal*
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      await loadingMessage.edit({ embeds: [errorEmbed] });
+    }
+    return;
+  }
+
   // Comando !fecharconversor
   if (message.content.startsWith('!fecharconversor ')) {
     const staffRoleId = '1230677503719374990';
@@ -5429,6 +5620,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     const thread = await starterMessage.startThread({
       name: `🎞️ | Conversão - ${user.username}`,
       autoArchiveDuration: 60,
+      type: 12, // GUILD_PRIVATE_THREAD - torna a thread privada
       reason: 'Conversão de arquivos'
     });
 
@@ -9382,13 +9574,31 @@ async function processFile(attachment, type, extraData = null) {
       fs.writeFileSync(tempInput, videoBuffer);
       temporarios.push(tempInput, tempOutput);
 
+      // Conversão em duas passadas para máxima qualidade
+      const tempPalette = `temp_palette_${nomeBase}.png`;
+      temporarios.push(tempPalette);
+
+      // Primeira passada: gerar paleta de cores otimizada
       await new Promise((resolve, reject) => {
         ffmpeg(tempInput)
-          .toFormat('gif')
           .outputOptions([
-            '-vf', 'scale=320:-1:flags=lanczos,fps=15',
-            '-t', '8',
-            '-pix_fmt', 'rgb24'
+            '-vf', 'scale=420:-1:flags=lanczos,fps=15,palettegen=max_colors=256:reserve_transparent=0',
+            '-t', '10'
+          ])
+          .on('end', resolve)
+          .on('error', reject)
+          .save(tempPalette);
+      });
+
+      // Segunda passada: aplicar paleta e gerar GIF final
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(tempInput)
+          .input(tempPalette)
+          .outputOptions([
+            '-filter_complex', 'scale=420:-1:flags=lanczos,fps=15[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=3',
+            '-t', '10',
+            '-loop', '0'
           ])
           .on('end', resolve)
           .on('error', reject)
@@ -10114,13 +10324,32 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
         .setStartTime(startTime)
         .setDuration(Math.min(duration, 10)) // Máximo 10 segundos
         .outputOptions([
-          '-vf', 'scale=480:-1:flags=lanczos,fps=25',
-          '-pix_fmt', 'rgb24'
+          // Primeiro passo: gerar paleta de cores de qualidade máxima
+          '-vf', 'scale=1080:-1:flags=lanczos:param0=5:param1=5,fps=24,eq=contrast=1.1:brightness=0.02:saturation=1.05,unsharp=5:5:0.8:3:3:0.4,palettegen=max_colors=256:stats_mode=diff:reserve_transparent=0',
+          '-sws_flags', 'lanczos+accurate_rnd+full_chroma_int+full_chroma_inp',
+          '-y'
         ])
-        .toFormat('gif')
-        .on('end', resolve)
+        .output(tempGif.replace('.gif', '_palette.png'))
+        .on('end', () => {
+          // Segundo passo: usar a paleta para criar GIF de qualidade cinematográfica
+          ffmpeg(tempVideo)
+            .input(tempGif.replace('.gif', '_palette.png'))
+            .setStartTime(startTime)
+            .setDuration(Math.min(duration, 10))
+            .outputOptions([
+              '-lavfi', 
+              'scale=1080:-1:flags=lanczos:param0=5:param1=5,fps=24,eq=contrast=1.1:brightness=0.02:saturation=1.05,unsharp=5:5:0.8:3:3:0.4,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff:reserve_transparent=0[p];[s1][p]paletteuse=dither=floyd_steinberg:bayer_scale=5:diff_mode=rectangle:new=1',
+              '-sws_flags', 'lanczos+accurate_rnd+full_chroma_int+full_chroma_inp',
+              '-loop', '0',
+              '-f', 'gif'
+            ])
+            .toFormat('gif')
+            .on('end', resolve)
+            .on('error', reject)
+            .save(tempGif);
+        })
         .on('error', reject)
-        .save(tempGif);
+        .run();
     });
 
     const gifBuffer = fs.readFileSync(tempGif);
