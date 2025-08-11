@@ -6411,7 +6411,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   }
 
   // Handlers para botões de recrutamento
-  if (customId === 'seja_maker') {
+  if (customId === 'f68019bd98e443d9bfbefbb1bb752d44') {
     const modal = new ModalBuilder()
       .setCustomId('seja_maker_modal')
       .setTitle('Seja Staff - GIFZADA');
@@ -6489,7 +6489,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     return;
   }
 
-  if (customId === 'migracao') {
+  if (customId === 'd2930ffe9dc94bf1bdd2d1f85db7299d') {
     const modal = new ModalBuilder()
       .setCustomId('migracao_modal')
       .setTitle('Migração - GIFZADA');
