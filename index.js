@@ -1763,7 +1763,7 @@ async function anunciarPostMaisCurtidaDaSemana() {
     const canalPostsId = '1392228130361708645'; // Canal onde os posts são feitos
     const canalAnuncioId = '1395858254176849960'; // Canal onde será anunciado o destaque
     const cargoDestaqueId = '1298128245694402630'; // Cargo de destaque da semana
-    
+
     const canal = client.channels.cache.get(canalPostsId);
     const canalAnuncio = client.channels.cache.get(canalAnuncioId);
 
@@ -3447,6 +3447,112 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
       console.log(`   Usuário: ${user.username} (${userId})`);
       console.log(`   Erro: ${error.message}\n`);
       await message.reply(`❌ Erro ao processar comando: ${error.message}\n\n🔧 **Soluções:**\n• Reinicie o Discord completamente\n• Aguarde 5 minutos após adicionar /gifs na bio\n• Tente novamente`);
+    }
+    return;
+  }
+
+  // Comando !criarwebhook
+  if (message.content.startsWith('!criarwebhook')) {
+    // Verificar se o usuário tem permissão (apenas administradores)
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasAdminRole = message.member && message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem criar webhooks.');
+    }
+
+    const args = message.content.split(' ');
+    
+    // Verificar se foi fornecido um canal
+    if (args.length < 2) {
+      return message.reply('❌ **Uso correto:** `!criarwebhook #canal [nome]`\n\n**Exemplo:** `!criarwebhook #general Webhook Bot`');
+    }
+
+    // Extrair canal mencionado ou ID
+    let targetChannel = null;
+    
+    if (message.mentions.channels.size > 0) {
+      targetChannel = message.mentions.channels.first();
+    } else {
+      // Tentar buscar por ID
+      const channelId = args[1].replace(/[<#>]/g, '');
+      targetChannel = message.guild.channels.cache.get(channelId);
+    }
+
+    if (!targetChannel) {
+      return message.reply('❌ Canal não encontrado. Use `#canal` ou forneça um ID válido.');
+    }
+
+    // Verificar se é um canal de texto
+    if (targetChannel.type !== 0) { // GUILD_TEXT
+      return message.reply('❌ Apenas canais de texto suportam webhooks.');
+    }
+
+    // Nome do webhook (padrão ou personalizado)
+    const webhookName = args.slice(2).join(' ') || `Webhook - ${targetChannel.name}`;
+
+    try {
+      // Criar webhook
+      const webhook = await targetChannel.createWebhook({
+        name: webhookName,
+        avatar: message.guild.iconURL({ dynamic: true, size: 512 }) || client.user.displayAvatarURL({ dynamic: true, size: 512 }),
+        reason: `Webhook criado por ${message.author.tag} (${message.author.id})`
+      });
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ **WEBHOOK CRIADO COM SUCESSO**')
+        .setDescription(`
+**Webhook criado no canal ${targetChannel}!**
+
+**📋 INFORMAÇÕES:**
+• **Nome:** ${webhookName}
+• **Canal:** ${targetChannel} (${targetChannel.name})
+• **ID:** \`${webhook.id}\`
+• **URL:** ||${webhook.url}||
+
+**👤 CRIADO POR:**
+• **Usuário:** ${message.author}
+• **Data:** ${new Date().toLocaleString('pt-BR')}
+
+**⚙️ CONFIGURAÇÕES:**
+• **Avatar:** Ícone do servidor
+• **Permissões:** Enviar mensagens no canal
+
+> ⚠️ **IMPORTANTE:** Mantenha a URL do webhook em segurança. Qualquer pessoa com acesso à URL pode enviar mensagens através dele.
+`)
+        .setColor('#00ff88')
+        .setThumbnail(webhook.avatarURL({ dynamic: true, size: 256 }) || client.user.displayAvatarURL({ dynamic: true, size: 256 }))
+        .addFields(
+          { 
+            name: '🔗 **Como usar**', 
+            value: `\`\`\`\nPOST ${webhook.url}\nContent-Type: application/json\n\n{\n  "content": "Sua mensagem aqui",\n  "username": "Nome personalizado",\n  "avatar_url": "URL do avatar"\n}\`\`\``, 
+            inline: false 
+          }
+        )
+        .setFooter({ 
+          text: 'SISTEMA DE WEBHOOKS GIFZADA',
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await message.reply({ embeds: [successEmbed] });
+
+      console.log(`Webhook criado: ${webhookName} no canal ${targetChannel.name} por ${message.author.tag}`);
+
+    } catch (error) {
+      console.error('Erro ao criar webhook:', error);
+      
+      let errorMessage = '❌ Erro ao criar webhook.';
+      
+      if (error.code === 50013) {
+        errorMessage = '❌ Não tenho permissão para criar webhooks neste canal.';
+      } else if (error.code === 30007) {
+        errorMessage = '❌ Limite máximo de webhooks atingido neste canal (10 webhooks por canal).';
+      } else if (error.code === 50001) {
+        errorMessage = '❌ Não tenho acesso a este canal.';
+      }
+
+      await message.reply(`${errorMessage}\n\n**Detalhes técnicos:** \`${error.message}\``);
     }
     return;
   }
