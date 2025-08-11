@@ -2148,11 +2148,11 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
 
     const recruitmentRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('seja_maker')
+        .setCustomId('f68019bd98e443d9bfbefbb1bb752d44')
         .setLabel('Seja Staff')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('migracao')
+        .setCustomId('d2930ffe9dc94bf1bdd2d1f85db7299d')
         .setLabel('Migração')
         .setStyle(ButtonStyle.Secondary)
     );
