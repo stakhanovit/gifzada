@@ -27,11 +27,8 @@ const ytdl = require('@distube/ytdl-core');
 const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
-const { createCanvas, loadImage, registerFont } = require('canvas');
+const { createBannerCropSession, handleBannerCropButton } = require('./utils/bannerCrop');
 require('dotenv').config();
-
-// Registrar a fonte personalizada
-registerFont('./Arial-bold.ttf', { family: 'Arial Bold' });
 
 // Configuração do PostgreSQL
 const pgClient = new PgClient({
@@ -859,6 +856,10 @@ const userCommentCount = new Map();
 const threadInactivityTimers = new Map(); // threadId -> { firstTimer, secondTimer }
 const threadWarningMessages = new Map(); // threadId -> messageId
 
+// Sistema de feedback para conversor
+const conversorFeedbackTimers = new Map(); // threadId -> timeoutId
+const conversorFeedbackGiven = new Set(); // threadId
+
 console.log('Sistema de posts PostgreSQL inicializado');
 
 // Função para criar postagem no estilo Twitter
@@ -1017,6 +1018,227 @@ function quebrarTexto(ctx, texto, larguraMaxima) {
   }
 
   return linhas;
+}
+
+// Funções para sistema de feedback do conversor
+async function startConversorFeedbackSystem(interaction, userId) {
+  const threadId = interaction.channel.id;
+
+  try {
+    const user = await client.users.fetch(userId);
+
+    // Embed solicitando feedback
+    const feedbackEmbed = new EmbedBuilder()
+      .setTitle('AVALIAÇÃO DO CONVERSOR')
+      .setDescription(`
+${user}, **sua conversão foi finalizada!**
+
+**Como foi sua experiência com nosso conversor?**
+
+Sua avaliação nos ajuda a melhorar continuamente o sistema de conversão!
+
+> *Clique no botão abaixo para compartilhar seu feedback*
+`)
+      .setColor('#870CFF')
+      .setFooter({ text: 'GIFZADA CONVERSOR • Sistema de Feedback' })
+      .setTimestamp();
+
+    // Botão de feedback
+    const feedbackRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`conversor_feedback_${threadId}`)
+        .setLabel('Dar Feedback')
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.reply({ 
+      content: `${user}`, 
+      embeds: [feedbackEmbed], 
+      components: [feedbackRow] 
+    });
+
+    // Configurar timeout de 3 minutos para encerramento automático
+    const timeoutId = setTimeout(async () => {
+      await handleConversorFeedbackTimeout(threadId);
+    }, 3 * 60 * 1000); // 3 minutos
+
+    conversorFeedbackTimers.set(threadId, timeoutId);
+
+  } catch (error) {
+    console.error('Erro ao iniciar sistema de feedback do conversor:', error);
+    // Em caso de erro, fechar normalmente
+    await finalizarThreadConversor(interaction);
+  }
+}
+
+async function handleConversorFeedbackTimeout(threadId) {
+  // Verificar se o feedback já foi dado
+  if (conversorFeedbackGiven.has(threadId)) {
+    return;
+  }
+
+  try {
+    const channel = client.channels.cache.get(threadId);
+    if (!channel) return;
+
+    const timeoutEmbed = new EmbedBuilder()
+      .setTitle('⏰ **TEMPO LIMITE ATINGIDO**')
+      .setDescription(`
+**Feedback não fornecido dentro de 3 minutos.**
+
+Thread será encerrada automaticamente...
+
+> ⚠️ *Obrigado por usar nosso conversor!*
+`)
+      .setColor('#ffaa00')
+      .setTimestamp();
+
+    await channel.send({ embeds: [timeoutEmbed] });
+
+    // Fechar thread após 2 segundos
+    setTimeout(async () => {
+      await finalizarThreadConversor(null, channel);
+    }, 2000);
+
+  } catch (error) {
+    console.error('Erro no timeout de feedback do conversor:', error);
+  }
+}
+
+async function registrarFeedbackConversor(threadId, userId, rating, feedbackText = null) {
+  try {
+    const user = await client.users.fetch(userId);
+    const isPositive = rating >= 8; // Considera positivo se >= 8
+
+    console.log(`Feedback conversor registrado: ${user.username} deu nota ${rating}${feedbackText ? ` com texto: "${feedbackText}"` : ''}`);
+
+    // Enviar feedback no canal específico
+    const feedbackChannelId = '1405236674052751512';
+    const feedbackChannel = client.channels.cache.get(feedbackChannelId);
+
+    if (feedbackChannel) {
+      const feedbackEmbed = new EmbedBuilder()
+        .setTitle('**FEEDBACK DO CONVERSOR**')
+        .setDescription(`
+**Usuário:** ${user}
+**Nota:** ${rating}/10 ${rating >= 8 ? '⭐' : rating >= 6 ? '👍' : rating >= 4 ? '👌' : '👎'}
+${feedbackText ? `\n**Comentário:**\n> "${feedbackText}"` : ''}
+
+`)
+        .setColor(rating >= 8 ? '#00ff88' : rating >= 6 ? '#4169e1' : rating >= 4 ? '#ffaa00' : '#ff4444')
+        .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+        .setFooter({ text: `Thread ID: ${threadId}` })
+        .setTimestamp();
+
+      await feedbackChannel.send({ embeds: [feedbackEmbed] });
+    }
+
+    // Verificar se deve dar cargo para feedbacks positivos
+    if (isPositive) {
+      await verificarCargoFeedbackPositivo(userId);
+    }
+
+    conversorFeedbackGiven.add(threadId);
+
+  } catch (error) {
+    console.error('Erro ao registrar feedback do conversor:', error);
+  }
+}
+
+async function verificarCargoFeedbackPositivo(userId) {
+  try {
+    // Buscar feedbacks positivos do usuário no canal
+    const feedbackChannelId = '1405236674052751512';
+    const feedbackChannel = client.channels.cache.get(feedbackChannelId);
+    
+    if (!feedbackChannel) return;
+
+    // Buscar mensagens recentes do canal (últimas 100)
+    const messages = await feedbackChannel.messages.fetch({ limit: 100 });
+    
+    let feedbacksPositivos = 0;
+    
+    for (const message of messages.values()) {
+      if (message.embeds.length > 0) {
+        const embed = message.embeds[0];
+        if (embed.description && embed.description.includes(`<@${userId}>`)) {
+          // Extrair nota do feedback
+          const notaMatch = embed.description.match(/\*\*Nota:\*\* (\d+)\/10/);
+          if (notaMatch) {
+            const nota = parseInt(notaMatch[1]);
+            if (nota >= 8) {
+              feedbacksPositivos++;
+            }
+          }
+        }
+      }
+    }
+
+    // Se tem 3 ou mais feedbacks positivos, dar o cargo
+    if (feedbacksPositivos >= 3) {
+      const guild = client.guilds.cache.get('953748240589787136'); // ID do servidor principal
+      if (guild) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        const cargoId = '1399533593360990421';
+        
+        if (member && !member.roles.cache.has(cargoId)) {
+          await member.roles.add(cargoId);
+          
+          // Enviar notificação no canal de feedback
+          const cargoEmbed = new EmbedBuilder()
+            .setTitle('🏆 **CARGO CONCEDIDO!**')
+            .setDescription(`
+**${member.user} recebeu o cargo especial!**
+
+**Motivo:** 3+ feedbacks positivos no conversor (nota ≥ 8)
+**Cargo:** <@&${cargoId}>
+**Total de feedbacks positivos:** ${feedbacksPositivos}
+
+> 🎉 *Parabéns pela excelente experiência com nosso conversor!*
+`)
+            .setColor('#FFD700')
+            .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+            .setTimestamp();
+
+          await feedbackChannel.send({ embeds: [cargoEmbed] });
+          
+          console.log(`Cargo especial concedido para ${member.user.username} por ${feedbacksPositivos} feedbacks positivos`);
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error('Erro ao verificar cargo de feedback positivo:', error);
+  }
+}
+
+async function finalizarThreadConversor(interaction, channel = null) {
+  const targetChannel = channel || interaction.channel;
+  const threadId = targetChannel.id;
+
+  try {
+    // Limpar timers e registros
+    if (conversorFeedbackTimers.has(threadId)) {
+      clearTimeout(conversorFeedbackTimers.get(threadId));
+      conversorFeedbackTimers.delete(threadId);
+    }
+    conversorFeedbackGiven.delete(threadId);
+    clearInactivityTimer(threadId);
+    conversaoEscolha.delete(threadId);
+
+    // Aguardar 2 segundos antes de trancar e arquivar
+    setTimeout(async () => {
+      try {
+        await targetChannel.setLocked(true);
+        await targetChannel.setArchived(true);
+      } catch (error) {
+        console.error('Erro ao arquivar thread do conversor:', error);
+      }
+    }, 2000);
+
+  } catch (error) {
+    console.error('Erro ao finalizar thread do conversor:', error);
+  }
 }
 
 // Funções para sistema de inatividade nas threads do conversor
@@ -2148,11 +2370,11 @@ Basta preencher o formulário na aba de migração e responder às perguntas com
 
     const recruitmentRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId('f68019bd98e443d9bfbefbb1bb752d44')
+        .setCustomId('seja_maker')
         .setLabel('Seja Staff')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId('d2930ffe9dc94bf1bdd2d1f85db7299d')
+        .setCustomId('migracao')
         .setLabel('Migração')
         .setStyle(ButtonStyle.Secondary)
     );
@@ -3447,6 +3669,189 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
       console.log(`   Usuário: ${user.username} (${userId})`);
       console.log(`   Erro: ${error.message}\n`);
       await message.reply(`❌ Erro ao processar comando: ${error.message}\n\n🔧 **Soluções:**\n• Reinicie o Discord completamente\n• Aguarde 5 minutos após adicionar /gifs na bio\n• Tente novamente`);
+    }
+    return;
+  }
+
+  // Comando !embedteste - Demonstra layouts organizados de componentes
+  if (message.content === '!embedteste') {
+    try {
+      // Criar embed principal
+      const mainEmbed = new EmbedBuilder()
+        .setTitle('🚀 **DEMONSTRAÇÃO DE COMPONENTES ORGANIZADOS**')
+        .setDescription(`
+**Esta mensagem demonstra layouts organizados de componentes Discord!**
+
+**📱 ORGANIZAÇÃO & SEÇÕES:**
+• Componentes organizados por função
+• Layout limpo e intuitivo
+• Múltiplas linhas de botões
+
+**🎛️ COMPONENTES DISPONÍVEIS:**
+• Botões primários, secundários e de perigo
+• Menus de seleção com múltiplas opções
+• Navegação e ações rápidas
+
+**✨ RECURSOS DEMONSTRADOS:**
+• Melhor organização visual
+• Responsividade aprimorada
+• Suporte a layouts complexos
+• Maior flexibilidade de design
+
+> Teste os componentes abaixo para ver a organização em ação!
+`)
+        .setColor('#5865f2')
+        .addFields(
+          { 
+            name: '🔧 **Seção de Configuração**', 
+            value: 'Use os botões abaixo para configurar preferências', 
+            inline: false 
+          },
+          { 
+            name: '📊 **Seção de Estatísticas**', 
+            value: 'Visualize dados e métricas', 
+            inline: true 
+          },
+          { 
+            name: '⚙️ **Seção Avançada**', 
+            value: 'Opções para usuários avançados', 
+            inline: true 
+          }
+        )
+        .setThumbnail(client.user.displayAvatarURL({ dynamic: true, size: 256 }))
+        .setFooter({ 
+          text: 'Layout Organizado de Componentes • discord.js v14',
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      // Seção 1 - Ações Principais
+      const primarySection = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('components_v2_primary')
+            .setLabel('Ação Principal')
+            .setEmoji('🎯')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_secondary') 
+            .setLabel('Ação Secundária')
+            .setEmoji('🔧')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_success')
+            .setLabel('Confirmar')
+            .setEmoji('✅')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId('components_v2_danger')
+            .setLabel('Deletar')
+            .setEmoji('🗑️')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+      // Seção 2 - Menu de Seleção
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('components_v2_select')
+        .setPlaceholder('🎨 Escolha uma configuração de tema...')
+        .setMinValues(1)
+        .setMaxValues(3)
+        .addOptions([
+          {
+            label: 'Tema Escuro',
+            description: 'Interface com cores escuras para conforto visual',
+            value: 'dark_theme',
+            emoji: '🌙'
+          },
+          {
+            label: 'Tema Claro', 
+            description: 'Interface clara e minimalista',
+            value: 'light_theme',
+            emoji: '☀️'
+          },
+          {
+            label: 'Alto Contraste',
+            description: 'Melhor acessibilidade visual',
+            value: 'high_contrast',
+            emoji: '🎯'
+          },
+          {
+            label: 'Modo Compacto',
+            description: 'Layout otimizado para economizar espaço',
+            value: 'compact_mode',
+            emoji: '📱'
+          },
+          {
+            label: 'Animações',
+            description: 'Ativar efeitos visuais e transições',
+            value: 'animations',
+            emoji: '✨'
+          }
+        ]);
+
+      const selectRow = new ActionRowBuilder().addComponents(selectMenu);
+
+      // Seção 3 - Navegação
+      const navigationSection = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('components_v2_prev')
+            .setLabel('Anterior')
+            .setEmoji('⬅️')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_home')
+            .setLabel('Início')
+            .setEmoji('🏠')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_next')
+            .setLabel('Próximo')
+            .setEmoji('➡️')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_info')
+            .setLabel('Mais Info')
+            .setEmoji('ℹ️')
+            .setStyle(ButtonStyle.Primary)
+        );
+
+      // Seção 4 - Ações Rápidas
+      const quickActions = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('components_v2_save')
+            .setLabel('Salvar')
+            .setEmoji('💾')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId('components_v2_cancel')
+            .setLabel('Cancelar')
+            .setEmoji('❌')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('components_v2_help')
+            .setLabel('Ajuda')
+            .setEmoji('❓')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setURL('https://discord.com/developers/docs/interactions/message-components')
+            .setLabel('Documentação')
+            .setEmoji('📖')
+            .setStyle(ButtonStyle.Link)
+        );
+
+      // Enviar mensagem com layout organizado
+      await message.channel.send({
+        embeds: [mainEmbed],
+        components: [primarySection, selectRow, navigationSection, quickActions]
+      });
+
+      console.log(`Demonstração de componentes organizados enviada por ${message.author.tag} em ${message.channel.name}`);
+
+    } catch (error) {
+      console.error('Erro no comando !embedteste:', error);
+      await message.reply(`❌ **Erro ao criar demonstração:**\n\`\`\`\n${error.message}\n\`\`\`\n\n**Detalhes:**\n• Usando discord.js padrão sem flags experimentais\n• Layout organizado em 4 seções\n• Todos os componentes funcionais`);
     }
     return;
   }
@@ -5445,6 +5850,61 @@ ${motivoRejeicao}
       await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
+    // Handler para modal de feedback do conversor
+    if (interaction.customId.startsWith('conversor_feedback_modal_')) {
+      const threadId = interaction.customId.replace('conversor_feedback_modal_', '');
+      const rating = parseInt(interaction.fields.getTextInputValue('rating'));
+      const feedbackText = interaction.fields.getTextInputValue('feedback_text') || null;
+
+      // Validar nota
+      if (isNaN(rating) || rating < 1 || rating > 10) {
+        return interaction.reply({
+          content: '❌ Por favor, insira uma nota válida entre 1 e 10.',
+         flags: 1 << 6
+        });
+      }
+
+      // Verificar se o feedback já foi dado
+      if (conversorFeedbackGiven.has(threadId)) {
+        return interaction.reply({
+          content: '❌ Feedback já foi registrado para esta thread.',
+         flags: 1 << 6
+        });
+      }
+
+      // Registrar feedback
+      await registrarFeedbackConversor(threadId, interaction.user.id, rating, feedbackText);
+
+      // Cancelar timeout automático
+      if (conversorFeedbackTimers.has(threadId)) {
+        clearTimeout(conversorFeedbackTimers.get(threadId));
+        conversorFeedbackTimers.delete(threadId);
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('FEEDBACK REGISTRADO')
+        .setDescription(`
+**Obrigado pelo seu feedback!**
+
+**Sua avaliação:** ${rating}/10 ${rating >= 8 ? '⭐' : rating >= 6 ? '👍' : rating >= 4 ? '👌' : '👎'}
+${feedbackText ? `**Seu comentário:** "${feedbackText}"` : ''}
+
+Seu feedback é muito importante para melhorarmos nosso conversor!
+
+Thread será fechada em alguns segundos...
+`)
+        .setColor('#00ff88')
+        .setFooter({ text: 'GIFZADA CONVERSOR • Feedback Registrado' })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [successEmbed] });
+
+      // Finalizar thread após 3 segundos
+      setTimeout(async () => {
+        await finalizarThreadConversor(interaction);
+      }, 3000);
+    }
+
     if (interaction.customId === 'tiktok_download_modal') {
       const tiktokUrl = interaction.fields.getTextInputValue('tiktok_url');
 
@@ -5761,6 +6221,12 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   }
 
   const { customId, user, channel } = interaction;
+
+  // Handle banner crop buttons
+  if (customId.startsWith('banner_crop_')) {
+    const handled = await handleBannerCropButton(interaction);
+    if (handled) return;
+  }
 
   if (customId === 'abrir_conversor') {
     const starterMessage = await channel.send({
@@ -6357,7 +6823,335 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     }
   }
 
+  // Handlers para Components V2 Demo
+  if (customId.startsWith('components_v2_')) {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      
+      const action = customId.split('_').slice(2).join('_'); // Remove 'components_v2_'
+      
+      let responseEmbed;
+      
+      switch (action) {
+        case 'primary':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('🎯 **AÇÃO PRINCIPAL EXECUTADA**')
+            .setDescription(`
+**Components V2 - Ação Principal**
 
+Você clicou no botão principal! Esta demonstração mostra como:
+
+• **Organizar componentes** em containers lógicos
+• **Usar diferentes estilos** de botão efetivamente  
+• **Implementar interações** com feedback claro
+• **Aproveitar a nova estrutura** de Components V2
+
+**Vantagens do Components V2:**
+✨ Layout mais organizado
+🎨 Melhor experiência visual
+📱 Responsividade aprimorada
+⚙️ Maior flexibilidade de design
+`)
+            .setColor('#5865f2')
+            .setTimestamp();
+          break;
+
+        case 'secondary':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('🔧 **AÇÃO SECUNDÁRIA EXECUTADA**')
+            .setDescription(`
+**Components V2 - Configuração**
+
+Esta é uma ação secundária de configuração.
+
+**Recursos demonstrados:**
+• Botões com estilos diferenciados
+• Feedback contextual para cada ação
+• Organização em seções lógicas
+• Components V2 com MessageFlags.IsComponentsV2
+
+**Código usado:**
+\`\`\`js
+flags: [MessageFlags.IsComponentsV2]
+\`\`\`
+`)
+            .setColor('#6c757d')
+            .setTimestamp();
+          break;
+
+        case 'success':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('✅ **CONFIRMAÇÃO EXECUTADA**')
+            .setDescription(`
+**Operação Confirmada com Sucesso!**
+
+Esta demonstração mostra como usar botões de confirmação em Components V2.
+
+**Características:**
+• Feedback imediato e claro
+• Cores que indicam o resultado
+• Organização visual aprimorada
+• Compatibilidade com discord.js v14
+
+> 🎉 Tudo funcionando perfeitamente!
+`)
+            .setColor('#28a745')
+            .setTimestamp();
+          break;
+
+        case 'danger':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('🗑️ **AÇÃO DE EXCLUSÃO SIMULADA**')
+            .setDescription(`
+**Simulação de Ação Perigosa**
+
+⚠️ Esta seria uma ação destrutiva, mas é apenas demonstração.
+
+**Boas práticas demonstradas:**
+• Cores vermelhas para ações perigosas
+• Emojis que reforçam o propósito
+• Feedback claro sobre consequências
+• Confirmações antes de ações irreversíveis
+
+> 🛡️ Em produção, adicione confirmação dupla!
+`)
+            .setColor('#dc3545')
+            .setTimestamp();
+          break;
+
+        case 'prev':
+        case 'home':
+        case 'next':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('🧭 **NAVEGAÇÃO EXECUTADA**')
+            .setDescription(`
+**Botão de Navegação: ${action.toUpperCase()}**
+
+Esta seção demonstra botões de navegação organizados.
+
+**Características dos Components V2:**
+• **Containers organizados** por função
+• **Seções visuais** bem definidas
+• **Navegação intuitiva** com feedback
+• **Layout responsivo** e limpo
+
+**Ação selecionada:** ${action === 'prev' ? 'Página Anterior' : action === 'home' ? 'Página Inicial' : 'Próxima Página'}
+`)
+            .setColor('#17a2b8')
+            .setTimestamp();
+          break;
+
+        case 'info':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('ℹ️ **INFORMAÇÕES TÉCNICAS**')
+            .setDescription(`
+**Discord Components V2 - Detalhes Técnicos**
+
+**🔧 Implementação:**
+\`\`\`js
+const { MessageFlags } = require('discord.js');
+
+await channel.send({
+  content: 'Mensagem com Components V2',
+  embeds: [embed],
+  components: [row1, row2, row3, row4],
+  flags: [MessageFlags.IsComponentsV2]
+});
+\`\`\`
+
+**📋 Recursos:**
+• Até 5 ActionRows por mensagem
+• Melhor organização visual
+• Suporte nativo no discord.js v14
+• Compatibilidade com componentes existentes
+
+**🎯 Casos de uso ideais:**
+• Painéis administrativos
+• Interfaces complexas
+• Formulários interativos
+• Sistemas de navegação
+`)
+            .setColor('#6f42c1')
+            .setTimestamp();
+          break;
+
+        case 'save':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('💾 **CONFIGURAÇÕES SALVAS**')
+            .setDescription(`
+**Dados salvos com sucesso!**
+
+Demonstração de ação de salvamento com Components V2.
+
+**✅ Itens processados:**
+• Layout e organização
+• Preferências do usuário  
+• Estados dos componentes
+• Configurações de interface
+
+**🔍 Processo:**
+1. Validação dos dados
+2. Aplicação das alterações
+3. Feedback visual
+4. Confirmação de sucesso
+
+> 💡 Em aplicações reais, aqui você salvaria no banco de dados.
+`)
+            .setColor('#28a745')
+            .setTimestamp();
+          break;
+
+        case 'cancel':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('❌ **OPERAÇÃO CANCELADA**')
+            .setDescription(`
+**Cancelamento executado**
+
+Demonstração de cancelamento gracioso.
+
+**Características:**
+• Feedback claro sobre cancelamento
+• Sem perda de estado anterior
+• Interface limpa após cancelamento
+• Botões organizados logicamente
+
+> 🔄 Você pode tentar novamente quando quiser.
+`)
+            .setColor('#6c757d')
+            .setTimestamp();
+          break;
+
+        case 'help':
+          responseEmbed = new EmbedBuilder()
+            .setTitle('❓ **SISTEMA DE AJUDA**')
+            .setDescription(`
+**Central de Ajuda - Components V2**
+
+**📚 Documentação:**
+• [Discord.js Guide](https://discordjs.guide/)
+• [Components V2 Docs](https://discord.com/developers/docs/interactions/message-components)
+• [MessageFlags Reference](https://discord-api-types.dev/api/discord-api-types-v10/enum/MessageFlags)
+
+**🛠️ Como implementar:**
+1. Importe MessageFlags do discord.js
+2. Organize componentes em ActionRows
+3. Use flags: [MessageFlags.IsComponentsV2]
+4. Implemente handlers para interações
+
+**💡 Dicas:**
+• Organize botões por função
+• Use cores apropriadas para cada ação
+• Implemente feedback claro
+• Teste em diferentes dispositivos
+`)
+            .setColor('#ffc107')
+            .setTimestamp();
+          break;
+
+        default:
+          responseEmbed = new EmbedBuilder()
+            .setTitle('🎛️ **COMPONENTS V2 DEMO**')
+            .setDescription(`
+**Interação detectada:** \`${action}\`
+
+Esta é a demonstração dos novos Discord Components V2 usando discord.js v14.
+
+**Funcionalidades testadas:**
+• Organização em containers
+• Múltiplas seções de componentes
+• Estilos variados de botões
+• Select menus configuráveis
+• MessageFlags.IsComponentsV2
+
+> ✨ Todos os componentes estão funcionando corretamente!
+`)
+            .setColor('#5865f2')
+            .setTimestamp();
+      }
+      
+      await interaction.editReply({ embeds: [responseEmbed] });
+      
+    } catch (error) {
+      console.error('Erro no handler Components V2:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: `❌ Erro ao processar Components V2: ${error.message}`,
+          ephemeral: true
+        });
+      } else {
+        await interaction.editReply({
+          content: `❌ Erro ao processar Components V2: ${error.message}`
+        });
+      }
+    }
+    return;
+  }
+
+  // Handler para select menu Components V2
+  if (interaction.isStringSelectMenu() && customId === 'components_v2_select') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      
+      const selectedValues = interaction.values;
+      const optionNames = {
+        'dark_theme': '🌙 Tema Escuro',
+        'light_theme': '☀️ Tema Claro', 
+        'high_contrast': '🎯 Alto Contraste',
+        'compact_mode': '📱 Modo Compacto',
+        'animations': '✨ Animações'
+      };
+      
+      const selectedOptions = selectedValues.map(value => optionNames[value] || value);
+      
+      const selectEmbed = new EmbedBuilder()
+        .setTitle('🎨 **CONFIGURAÇÕES DE TEMA APLICADAS**')
+        .setDescription(`
+**Opções selecionadas:**
+${selectedOptions.map(option => `• ${option}`).join('\n')}
+
+**Components V2 - Select Menu Demo**
+
+Este select menu demonstra:
+• **Múltipla seleção** (1-3 opções)
+• **Valores customizados** com emojis
+• **Descrições detalhadas** para cada opção
+• **Feedback imediato** após seleção
+• **Integração com MessageFlags.IsComponentsV2**
+
+**Valores processados:**
+\`\`\`json
+${JSON.stringify(selectedValues, null, 2)}
+\`\`\`
+
+> 🎉 Configurações aplicadas com sucesso!
+`)
+        .setColor('#9c41ff')
+        .addFields(
+          {
+            name: '⚙️ **Configurações Ativas**',
+            value: selectedOptions.length > 0 
+              ? selectedOptions.join('\n') 
+              : 'Nenhuma opção selecionada',
+            inline: true
+          },
+          {
+            name: '📊 **Total Selecionado**', 
+            value: `${selectedValues.length}/3 opções`,
+            inline: true
+          }
+        )
+        .setTimestamp();
+        
+      await interaction.editReply({ embeds: [selectEmbed] });
+      
+    } catch (error) {
+      console.error('Erro no select menu Components V2:', error);
+      await interaction.editReply({
+        content: `❌ Erro ao processar seleção: ${error.message}`
+      });
+    }
+    return;
+  }
 
   // Handlers para botões de suporte
   if (customId === 'receba_ajuda') {
@@ -6411,7 +7205,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   }
 
   // Handlers para botões de recrutamento
-  if (customId === 'f68019bd98e443d9bfbefbb1bb752d44') {
+  if (customId === 'seja_maker') {
     const modal = new ModalBuilder()
       .setCustomId('seja_maker_modal')
       .setTitle('Seja Staff - GIFZADA');
@@ -6489,7 +7283,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     return;
   }
 
-  if (customId === 'd2930ffe9dc94bf1bdd2d1f85db7299d') {
+  if (customId === 'migracao') {
     const modal = new ModalBuilder()
       .setCustomId('migracao_modal')
       .setTitle('Migração - GIFZADA');
@@ -6977,25 +7771,34 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
   // Handler para encerrar thread
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
-      // Limpar timer de inatividade
-      clearInactivityTimer(interaction.channel.id);
-      conversaoEscolha.delete(interaction.channel.id);
+      // Verificar se é uma thread de conversor
+      const threadName = interaction.channel.name;
+      if (threadName.includes('Conversão -') || conversaoEscolha.has(interaction.channel.id)) {
+        // Limpar timer de inatividade
+        clearInactivityTimer(interaction.channel.id);
+        
+        // Iniciar sistema de feedback para o conversor
+        await startConversorFeedbackSystem(interaction, interaction.user.id);
+        return;
+      } else {
+        // Thread normal, encerrar sem feedback
+        clearInactivityTimer(interaction.channel.id);
+        conversaoEscolha.delete(interaction.channel.id);
 
-      await interaction.reply({ 
-        content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
-      });
+        await interaction.reply({ 
+          content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
+        });
 
-      // Aguardar 2 segundos antes de trancar e arquivar
-      setTimeout(async () => {
-        try {
-          // Trancar a thread primeiro
-          await interaction.channel.setLocked(true);
-          // Depois arquivar
-          await interaction.channel.setArchived(true);
-        } catch (error) {
-          console.error('Erro ao trancar/arquivar thread:', error);
-        }
-      }, 2000);
+        // Aguardar 2 segundos antes de trancar e arquivar
+        setTimeout(async () => {
+          try {
+            await interaction.channel.setLocked(true);
+            await interaction.channel.setArchived(true);
+          } catch (error) {
+            console.error('Erro ao trancar/arquivar thread:', error);
+          }
+        }, 2000);
+      }
     } else {
       await interaction.reply({ 
         content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
@@ -7349,6 +8152,45 @@ Thread será fechada em alguns segundos...
     setTimeout(async () => {
       await finalizarTicket(interaction, assignment);
     }, 3000);
+  }
+
+  // Handler para feedback do conversor
+  if (customId.startsWith('conversor_feedback_')) {
+    const threadId = customId.replace('conversor_feedback_', '');
+
+    // Verificar se o feedback já foi dado
+    if (conversorFeedbackGiven.has(threadId)) {
+      return interaction.reply({
+        content: '❌ Feedback já foi registrado para esta thread.',
+       flags: 1 << 6
+      });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`conversor_feedback_modal_${threadId}`)
+      .setTitle('💬 Feedback do Conversor');
+
+    const ratingInput = new TextInputBuilder()
+      .setCustomId('rating')
+      .setLabel('Nota de 1 a 10')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Digite um número de 1 a 10')
+      .setMinLength(1)
+      .setMaxLength(2)
+      .setRequired(true);
+
+    const feedbackInput = new TextInputBuilder()
+      .setCustomId('feedback_text')
+      .setLabel('Comentário (opcional)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Compartilhe sua experiência com o conversor...')
+      .setRequired(false);
+
+    const row1 = new ActionRowBuilder().addComponents(ratingInput);
+    const row2 = new ActionRowBuilder().addComponents(feedbackInput);
+    modal.addComponents(row1, row2);
+
+    await interaction.showModal(modal);
   }
 
   // Handlers para sistema de banimento
@@ -9593,6 +10435,21 @@ ${formatosTexto}
       return;
     }
 
+    // Handle discord-banner with interactive crop system
+    if (tipo === 'discord-banner') {
+      // Create a temporary interaction-like object for the createBannerCropSession function
+      const interactionObject = {
+        editReply: async (options) => {
+          await aguardandoMsg.edit(options);
+        },
+        user: message.author
+      };
+      
+      await createBannerCropSession(interactionObject, file);
+      conversaoEscolha.delete(message.channel.id);
+      return;
+    }
+
     const result = await processFile(file, tipo, extraData);
     const { buffer, name, temporarios } = result;
 
@@ -9884,98 +10741,41 @@ async function processFile(attachment, type, extraData = null) {
     }
 
     case 'discord-banner': {
+      // Usar sistema interativo do bannerCrop
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-
-      const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
-
-      if (isGif) {
-        const inputPath = `banner_${nomeBase}.gif`;
-        const outputPath = `banner_out_${nomeBase}.gif`;
-        fs.writeFileSync(inputPath, buffer);
-        temporarios.push(inputPath, outputPath);
-
-        // Obter dimensões do GIF
-        const metadata = await sharp(buffer, { animated: false }).metadata();
-        const { width, height } = metadata;
-
-        // Calcular crop para 734x293 (proporção do banner do Discord)
-        const targetWidth = 734;
-        const targetHeight = 293;
-        const targetRatio = targetWidth / targetHeight;
-        const currentRatio = width / height;
-
-        let cropWidth, cropHeight, left, top;
-
-        if (currentRatio > targetRatio) {
-          // Imagem mais larga, cortar largura
-          cropHeight = height;
-          cropWidth = Math.round(height * targetRatio);
-          left = Math.round((width - cropWidth) / 2);
-          top = 0;
-        } else {
-          // Imagem mais alta, cortar altura
-          cropWidth = width;
-          cropHeight = Math.round(width / targetRatio);
-          left = 0;
-          top = Math.round((height - cropHeight) / 2);
-        }
-
-        if (!gifsicle) {
-          throw new Error('Gifsicle não está disponível. Tente novamente em alguns segundos.');
-        }
-
-        await new Promise((resolve, reject) => {
-          execFile(gifsicle, [
-            '--crop', `${left},${top}+${cropWidth}x${cropHeight}`,
-            '--resize', `${targetWidth}x${targetHeight}`,
-            inputPath, 
-            '-o', outputPath
-          ], err => {
-            if (err) return reject(err);
-            resolve();
-          });
-        });
-
-        const bannerGif = fs.readFileSync(outputPath);
-        return { buffer: bannerGif, name: `banner_discord.gif`, temporarios };
-      } else {
-        const metadata = await sharp(buffer).metadata();
-        const { width, height } = metadata;
-
-        // Calcular crop para banner do Discord
-        const targetWidth = 734;
-        const targetHeight = 293;
-        const targetRatio = targetWidth / targetHeight;
-        const currentRatio = width / height;
-
-        let cropWidth, cropHeight, left, top;
-
-        if (currentRatio > targetRatio) {
-          cropHeight = height;
-          cropWidth = Math.round(height * targetRatio);
-          left = Math.round((width - cropWidth) / 2);
-          top = 0;
-        } else {
-          cropWidth = width;
-          cropHeight = Math.round(width / targetRatio);
-          left = 0;
-          top = Math.round((height - cropHeight) / 2);
-        }
-
-        const extension = attachment.name.split('.').pop().toLowerCase();
-        const bannerImage = await sharp(buffer)
-          .extract({ left, top, width: cropWidth, height: cropHeight })
-          .resize(targetWidth, targetHeight)
-          .toBuffer();
-
-        return { 
-          buffer: bannerImage, 
-          name: `banner_discord.${extension}`, 
-          temporarios: [] 
-        };
+      
+      // Verificar se é uma imagem
+      if (!attachment.contentType?.startsWith('image/')) {
+        throw new Error('Por favor, envie apenas arquivos de imagem!');
       }
+
+      // Verificar tamanho do arquivo (máximo 8MB)
+      if (attachment.size > 8 * 1024 * 1024) {
+        throw new Error('A imagem é muito grande! Máximo 8MB.');
+      }
+
+      // Criar objeto de pseudo-interação para compatibilidade
+      const interactionObject = {
+        editReply: async (options) => {
+          // Retornar mensagem para processar através do sistema principal
+          return { interactiveSession: true, options };
+        },
+        user: { id: 'user_interactive' }
+      };
+
+      // Iniciar sessão interativa de banner crop
+      const sessionResult = await createBannerCropSession(interactionObject, attachment);
+      
+      // Retornar indicador de que deve usar sistema interativo
+      return { 
+        interactive: true,
+        sessionResult,
+        buffer: buffer, 
+        name: `banner_interactive.png`, 
+        temporarios: [] 
+      };
     }
 
     case 'format-convert': {
