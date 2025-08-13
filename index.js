@@ -1,3 +1,30 @@
+// Fix for Railway Node.js 18 - comprehensive polyfills for undici
+if (typeof globalThis.File === 'undefined') {
+  const { Blob } = require('buffer');
+  
+  // File polyfill
+  globalThis.File = class File extends Blob {
+    constructor(chunks, fileName, options = {}) {
+      super(chunks, options);
+      this.name = fileName;
+      this.lastModified = options.lastModified || Date.now();
+      this.webkitRelativePath = '';
+    }
+  };
+  
+  // FormData polyfill if needed
+  if (typeof globalThis.FormData === 'undefined') {
+    globalThis.FormData = require('form-data');
+  }
+  
+  // Request/Response polyfills if needed
+  if (typeof globalThis.Request === 'undefined') {
+    const { Request, Response } = require('undici');
+    globalThis.Request = Request;
+    globalThis.Response = Response;
+  }
+}
+
 const {
   Client,
   GatewayIntentBits,
