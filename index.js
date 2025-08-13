@@ -1,3 +1,5 @@
+
+
 const {
   Client,
   GatewayIntentBits,
@@ -147,47 +149,6 @@ async function initializeDatabase() {
       )
     `);
 
-    // Criar tabela de estatísticas do conversor
-    await pgClient.query(`
-      CREATE TABLE IF NOT EXISTS converter_stats (
-        user_id VARCHAR(20) PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
-        total_conversions INTEGER DEFAULT 0,
-        feedbacks_given INTEGER DEFAULT 0,
-        negative_feedbacks INTEGER DEFAULT 0,
-        last_conversion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Criar tabela de feedbacks do conversor
-    await pgClient.query(`
-      CREATE TABLE IF NOT EXISTS converter_feedback (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(20) NOT NULL,
-        username VARCHAR(100) NOT NULL,
-        rating INTEGER NOT NULL,
-        feedback_text TEXT,
-        thread_id VARCHAR(20),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        is_positive BOOLEAN DEFAULT FALSE,
-        is_negative BOOLEAN DEFAULT FALSE
-      )
-    `);
-
-    // Criar tabela de advertências do conversor
-    await pgClient.query(`
-      CREATE TABLE IF NOT EXISTS converter_warnings (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(20) NOT NULL,
-        warning_type VARCHAR(50) NOT NULL,
-        reason TEXT NOT NULL,
-        issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        expires_at TIMESTAMP NOT NULL,
-        is_active BOOLEAN DEFAULT TRUE
-      )
-    `);
-
     // Criar tabela de pontos dos usuários
     await pgClient.query(`
       CREATE TABLE IF NOT EXISTS user_points (
@@ -254,7 +215,6 @@ const client = new Client({
 });
 
 const conversaoEscolha = new Map();
-const otimizacaoTentativa = new Map(); // Para rastrear tentativas de otimização
 
 // Funções para gerenciar threads ativas
 async function hasActiveThread(userId) {
@@ -892,126 +852,9 @@ const postAuthors = new Map();
 const postPrivacySettings = new Map();
 const userCommentCount = new Map();
 
-// Funções para gerenciar estatísticas do conversor
-async function updateConverterStats(userId, username, gaveFeedback = false, isNegativeFeedback = false) {
-  try {
-    // Atualizar ou criar registro do usuário
-    await pgClient.query(`
-      INSERT INTO converter_stats (user_id, username, total_conversions, feedbacks_given, negative_feedbacks, last_conversion)
-      VALUES ($1, $2, 1, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id) 
-      DO UPDATE SET 
-        username = $2,
-        total_conversions = converter_stats.total_conversions + 1,
-        feedbacks_given = converter_stats.feedbacks_given + $3,
-        negative_feedbacks = converter_stats.negative_feedbacks + $4,
-        last_conversion = CURRENT_TIMESTAMP
-    `, [userId, username, gaveFeedback ? 1 : 0, isNegativeFeedback ? 1 : 0]);
-
-  } catch (error) {
-    console.error('Erro ao atualizar estatísticas do conversor:', error);
-  }
-}
-
-async function checkAndIssueWarning(userId, username) {
-  try {
-    // Buscar estatísticas do usuário
-    const statsResult = await pgClient.query(
-      'SELECT * FROM converter_stats WHERE user_id = $1',
-      [userId]
-    );
-
-    if (statsResult.rows.length === 0) return false;
-
-    const stats = statsResult.rows[0];
-    const { total_conversions, feedbacks_given, negative_feedbacks } = stats;
-
-    let shouldWarn = false;
-    let warningReason = '';
-
-    // Verificar se deve dar advertência
-    // Critério 1: A cada 5 conversões, deve dar pelo menos 1 feedback
-    if (total_conversions >= 5 && (feedbacks_given === 0 || (total_conversions / feedbacks_given) > 5)) {
-      shouldWarn = true;
-      warningReason = `Muitas conversões sem feedback: ${total_conversions} conversões, apenas ${feedbacks_given} feedbacks dados`;
-    }
-
-    // Critério 2: Muitos feedbacks negativos (mais de 60% negativos)
-    if (feedbacks_given >= 3 && (negative_feedbacks / feedbacks_given) > 0.6) {
-      shouldWarn = true;
-      warningReason = `Excesso de feedbacks negativos: ${negative_feedbacks} de ${feedbacks_given} feedbacks são negativos`;
-    }
-
-    // Critério 3: Mais de 10 conversões com menos de 2 feedbacks
-    if (total_conversions > 10 && feedbacks_given < 2) {
-      shouldWarn = true;
-      warningReason = `Uso excessivo sem participação: ${total_conversions} conversões com apenas ${feedbacks_given} feedback(s)`;
-    }
-
-    if (shouldWarn) {
-      // Verificar se já tem advertência ativa
-      const activeWarningResult = await pgClient.query(
-        'SELECT * FROM converter_warnings WHERE user_id = $1 AND is_active = TRUE AND expires_at > CURRENT_TIMESTAMP',
-        [userId]
-      );
-
-      if (activeWarningResult.rows.length === 0) {
-        // Aplicar advertência de 3 dias
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 3);
-
-        await pgClient.query(
-          'INSERT INTO converter_warnings (user_id, warning_type, reason, expires_at) VALUES ($1, $2, $3, $4)',
-          [userId, 'converter_abuse', warningReason, expiresAt]
-        );
-
-        console.log(`Advertência aplicada para ${username}: ${warningReason}`);
-        return { warned: true, reason: warningReason, expiresAt };
-      }
-    }
-
-    return false;
-  } catch (error) {
-    console.error('Erro ao verificar/aplicar advertência:', error);
-    return false;
-  }
-}
-
-async function hasActiveWarning(userId) {
-  try {
-    const result = await pgClient.query(
-      'SELECT * FROM converter_warnings WHERE user_id = $1 AND is_active = TRUE AND expires_at > CURRENT_TIMESTAMP ORDER BY issued_at DESC LIMIT 1',
-      [userId]
-    );
-
-    return result.rows.length > 0 ? result.rows[0] : null;
-  } catch (error) {
-    console.error('Erro ao verificar advertência ativa:', error);
-    return null;
-  }
-}
-
-async function getConverterStats(userId) {
-  try {
-    const result = await pgClient.query(
-      'SELECT * FROM converter_stats WHERE user_id = $1',
-      [userId]
-    );
-
-    return result.rows.length > 0 ? result.rows[0] : null;
-  } catch (error) {
-    console.error('Erro ao buscar estatísticas do conversor:', error);
-    return null;
-  }
-}
-
 // Sistema de inatividade para threads do conversor
 const threadInactivityTimers = new Map(); // threadId -> { firstTimer, secondTimer }
 const threadWarningMessages = new Map(); // threadId -> messageId
-
-// Sistema de feedback para conversor
-const conversorFeedbackTimers = new Map(); // threadId -> timeoutId
-const conversorFeedbackGiven = new Set(); // threadId
 
 console.log('Sistema de posts PostgreSQL inicializado');
 
@@ -1171,272 +1014,6 @@ function quebrarTexto(ctx, texto, larguraMaxima) {
   }
 
   return linhas;
-}
-
-// Funções para sistema de feedback do conversor
-async function startConversorFeedbackSystem(interaction, userId) {
-  const threadId = interaction.channel.id;
-
-  try {
-    const user = await client.users.fetch(userId);
-
-    // Embed solicitando feedback
-    const feedbackEmbed = new EmbedBuilder()
-      .setTitle('AVALIAÇÃO DO CONVERSOR')
-      .setDescription(`
-${user}, **sua conversão foi finalizada!**
-
-**Como foi sua experiência com nosso conversor?**
-
-Sua avaliação nos ajuda a melhorar continuamente o sistema de conversão!
-
-> *Clique no botão abaixo para compartilhar seu feedback*
-`)
-      .setColor('#870CFF')
-      .setFooter({ text: 'GIFZADA CONVERSOR • Sistema de Feedback' })
-      .setTimestamp();
-
-    // Botão de feedback
-    const feedbackRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`conversor_feedback_${threadId}`)
-        .setLabel('Dar Feedback')
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    await interaction.reply({ 
-      content: `${user}`, 
-      embeds: [feedbackEmbed], 
-      components: [feedbackRow] 
-    });
-
-    // Configurar timeout de 3 minutos para encerramento automático
-    const timeoutId = setTimeout(async () => {
-      await handleConversorFeedbackTimeout(threadId);
-    }, 3 * 60 * 1000); // 3 minutos
-
-    conversorFeedbackTimers.set(threadId, timeoutId);
-
-  } catch (error) {
-    console.error('Erro ao iniciar sistema de feedback do conversor:', error);
-    // Em caso de erro, fechar normalmente
-    await finalizarThreadConversor(interaction);
-  }
-}
-
-async function handleConversorFeedbackTimeout(threadId) {
-  // Verificar se o feedback já foi dado
-  if (conversorFeedbackGiven.has(threadId)) {
-    return;
-  }
-
-  try {
-    const channel = client.channels.cache.get(threadId);
-    if (!channel) return;
-
-    // Encontrar o usuário através do nome da thread
-    const threadName = channel.name;
-    const usernameMatch = threadName.match(/🎞️ \| Conversão - (.+)/);
-    
-    if (usernameMatch) {
-      const username = usernameMatch[1];
-      // Buscar o usuário através de mensagens da thread
-      const messages = await channel.messages.fetch({ limit: 10 });
-      const userMessage = messages.find(msg => msg.author.username === username);
-      
-      if (userMessage) {
-        // Atualizar estatísticas (não deu feedback)
-        await updateConverterStats(userMessage.author.id, userMessage.author.username, false, false);
-        
-        // Verificar se deve aplicar advertência
-        const warningResult = await checkAndIssueWarning(userMessage.author.id, userMessage.author.username);
-        
-        if (warningResult && warningResult.warned) {
-          const warningEmbed = new EmbedBuilder()
-            .setTitle('⚠️ **ADVERTÊNCIA APLICADA**')
-            .setDescription(`
-**Tempo limite atingido - Feedback não fornecido.**
-
-**Motivo da advertência:**
-\`\`\`
-${warningResult.reason}
-\`\`\`
-
-**Sua próxima tentativa de usar o conversor será bloqueada por 3 dias.**
-**Expira em:** ${warningResult.expiresAt.toLocaleString('pt-BR')}
-
-> 💡 *Para evitar futuras advertências, sempre dê feedback após usar o conversor.*
-`)
-            .setColor('#ff4444')
-            .setTimestamp();
-
-          await channel.send({ embeds: [warningEmbed] });
-        }
-      }
-    }
-
-    const timeoutEmbed = new EmbedBuilder()
-      .setTitle('⏰ **TEMPO LIMITE ATINGIDO**')
-      .setDescription(`
-**Feedback não fornecido dentro de 3 minutos.**
-
-Thread será encerrada automaticamente...
-
-> ⚠️ *Obrigado por usar nosso conversor!*
-`)
-      .setColor('#ffaa00')
-      .setTimestamp();
-
-    await channel.send({ embeds: [timeoutEmbed] });
-
-    // Fechar thread após 2 segundos
-    setTimeout(async () => {
-      await finalizarThreadConversor(null, channel);
-    }, 2000);
-
-  } catch (error) {
-    console.error('Erro no timeout de feedback do conversor:', error);
-  }
-}
-
-async function registrarFeedbackConversor(threadId, userId, rating, feedbackText = null) {
-  try {
-    const user = await client.users.fetch(userId);
-    const isPositive = rating >= 8; // Considera positivo se >= 8
-    const isNegative = rating < 6; // Considera negativo se < 6
-
-    console.log(`Feedback conversor registrado: ${user.username} deu nota ${rating}${feedbackText ? ` com texto: "${feedbackText}"` : ''}`);
-
-    // Salvar feedback na nova tabela converter_feedback
-    await pgClient.query(`
-      INSERT INTO converter_feedback (user_id, username, rating, feedback_text, thread_id, is_positive, is_negative)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [userId, user.username, rating, feedbackText, threadId, isPositive, isNegative]);
-
-    // Atualizar estatísticas do usuário com o feedback
-    await updateConverterStats(userId, user.username, true, isNegative);
-
-    // Verificar se deve aplicar advertência
-    const warningResult = await checkAndIssueWarning(userId, user.username);
-    
-    // Enviar feedback no canal específico
-    const feedbackChannelId = '1405236674052751512';
-    const feedbackChannel = client.channels.cache.get(feedbackChannelId);
-
-    if (feedbackChannel) {
-      let warningText = '';
-      if (warningResult && warningResult.warned) {
-        warningText = `\n\n⚠️ **ADVERTÊNCIA APLICADA**\nMotivo: ${warningResult.reason}\nExpira: ${warningResult.expiresAt.toLocaleString('pt-BR')}`;
-      }
-
-      const feedbackEmbed = new EmbedBuilder()
-        .setTitle('**FEEDBACK DO CONVERSOR**')
-        .setDescription(`
-**Usuário:** ${user}
-**Nota:** ${rating}/10 ${rating >= 8 ? '⭐' : rating >= 6 ? '👍' : rating >= 4 ? '👌' : '👎'}
-${feedbackText ? `\n**Comentário:**\n> "${feedbackText}"` : ''}${warningText}
-`)
-        .setColor(rating >= 8 ? '#00ff88' : rating >= 6 ? '#4169e1' : rating >= 4 ? '#ffaa00' : '#ff4444')
-        .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-        .setFooter({ text: `Thread ID: ${threadId}` })
-        .setTimestamp();
-
-      await feedbackChannel.send({ embeds: [feedbackEmbed] });
-    }
-
-    // Verificar se deve dar cargo para feedbacks positivos
-    if (isPositive) {
-      await verificarCargoFeedbackPositivo(userId);
-    }
-
-    conversorFeedbackGiven.add(threadId);
-
-  } catch (error) {
-    console.error('Erro ao registrar feedback do conversor:', error);
-  }
-}
-
-async function verificarCargoFeedbackPositivo(userId) {
-  try {
-    // Buscar feedbacks positivos do usuário na nova tabela
-    const result = await pgClient.query(`
-      SELECT COUNT(*) as positive_count 
-      FROM converter_feedback 
-      WHERE user_id = $1 AND is_positive = TRUE
-    `, [userId]);
-
-    const feedbacksPositivos = parseInt(result.rows[0].positive_count);
-
-    // Se tem 3 ou mais feedbacks positivos, dar o cargo
-    if (feedbacksPositivos >= 3) {
-      const guild = client.guilds.cache.get('953748240589787136'); // ID do servidor principal
-      if (guild) {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        const cargoId = '1399533593360990421';
-        
-        if (member && !member.roles.cache.has(cargoId)) {
-          await member.roles.add(cargoId);
-          
-          // Enviar notificação no canal de feedback
-          const feedbackChannelId = '1405236674052751512';
-          const feedbackChannel = client.channels.cache.get(feedbackChannelId);
-          
-          if (feedbackChannel) {
-            const cargoEmbed = new EmbedBuilder()
-              .setTitle('**CARGO CONCEDIDO!**')
-              .setDescription(`
-**${member.user} recebeu o cargo especial!**
-
-**Motivo:** 3+ feedbacks positivos no conversor (nota ≥ 8)
-**Cargo:** <@&${cargoId}>
-**Total de feedbacks positivos:** ${feedbacksPositivos}
-
-> *Parabéns pela excelente experiência com nosso conversor!*
-`)
-              .setColor('#FFD700')
-              .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-              .setTimestamp();
-
-            await feedbackChannel.send({ embeds: [cargoEmbed] });
-          }
-          
-          console.log(`Cargo especial concedido para ${member.user.username} por ${feedbacksPositivos} feedbacks positivos`);
-        }
-      }
-    }
-
-  } catch (error) {
-    console.error('Erro ao verificar cargo de feedback positivo:', error);
-  }
-}
-
-async function finalizarThreadConversor(interaction, channel = null) {
-  const targetChannel = channel || interaction.channel;
-  const threadId = targetChannel.id;
-
-  try {
-    // Limpar timers e registros
-    if (conversorFeedbackTimers.has(threadId)) {
-      clearTimeout(conversorFeedbackTimers.get(threadId));
-      conversorFeedbackTimers.delete(threadId);
-    }
-    conversorFeedbackGiven.delete(threadId);
-    clearInactivityTimer(threadId);
-    conversaoEscolha.delete(threadId);
-
-    // Aguardar 2 segundos antes de trancar e arquivar
-    setTimeout(async () => {
-      try {
-        await targetChannel.setLocked(true);
-        await targetChannel.setArchived(true);
-      } catch (error) {
-        console.error('Erro ao arquivar thread do conversor:', error);
-      }
-    }, 2000);
-
-  } catch (error) {
-    console.error('Erro ao finalizar thread do conversor:', error);
-  }
 }
 
 // Funções para sistema de inatividade nas threads do conversor
@@ -3422,73 +2999,6 @@ Selecione uma área para acessar suas funções específicas:
     await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
   }
 
-  // Comando !conversorestats
-  if (message.content === '!conversorestats') {
-    try {
-      const userId = message.author.id;
-      const user = message.author;
-
-      // Buscar estatísticas do usuário
-      const stats = await getConverterStats(userId);
-      const activeWarning = await hasActiveWarning(userId);
-
-      if (!stats) {
-        return message.reply('📊 Você ainda não usou o conversor.');
-      }
-
-      const feedbackRate = stats.total_conversions > 0 ? ((stats.feedbacks_given / stats.total_conversions) * 100).toFixed(1) : 0;
-      const negativeRate = stats.feedbacks_given > 0 ? ((stats.negative_feedbacks / stats.feedbacks_given) * 100).toFixed(1) : 0;
-
-      let statusText = '✅ Status: Normal';
-      let statusColor = '#00ff88';
-
-      if (activeWarning) {
-        const expiresAt = new Date(activeWarning.expires_at);
-        const timeLeft = Math.ceil((expiresAt - new Date()) / (1000 * 60 * 60 * 24));
-        statusText = `⚠️ Status: Advertido (${timeLeft} dia(s) restantes)`;
-        statusColor = '#ff4444';
-      }
-
-      const statsEmbed = new EmbedBuilder()
-        .setTitle('📊 **ESTATÍSTICAS DO CONVERSOR**')
-        .setDescription(`
-**Usuário:** ${user}
-
-## 📈 **ATIVIDADE:**
-• **Total de Conversões:** ${stats.total_conversions}
-• **Feedbacks Dados:** ${stats.feedbacks_given}
-• **Taxa de Feedback:** ${feedbackRate}%
-
-## 📋 **QUALIDADE:**
-• **Feedbacks Negativos:** ${stats.negative_feedbacks}
-• **Taxa Negativa:** ${negativeRate}%
-• **Última Conversão:** ${new Date(stats.last_conversion).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
-
-## ⚖️ **STATUS:**
-${statusText}
-
-${activeWarning ? `\n**Motivo da Advertência:**\n\`${activeWarning.reason}\`\n**Expira:** ${new Date(activeWarning.expires_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` : ''}
-
-## 💡 **DICAS PARA MANTER BOA REPUTAÇÃO:**
-• Dê feedback após cada conversão
-• Seja honesto e construtivo
-• Use o conversor responsavelmente
-• Avalie a qualidade do resultado
-`)
-        .setColor(statusColor)
-        .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-        .setFooter({ text: 'SISTEMA DE ESTATÍSTICAS GIFZADA CONVERSOR' })
-        .setTimestamp();
-
-      await message.reply({ embeds: [statsEmbed] });
-
-    } catch (error) {
-      console.error('Erro no comando !conversorestats:', error);
-      await message.reply('❌ Erro ao buscar estatísticas do conversor.');
-    }
-    return;
-  }
-
   // Comando !pontos (novo sistema multi-servidor)
   if (message.content === '!pontos') {
     const userId = message.author.id;
@@ -3938,189 +3448,6 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
     return;
   }
 
-  // Comando !embedteste - Demonstra layouts organizados de componentes
-  if (message.content === '!embedteste') {
-    try {
-      // Criar embed principal
-      const mainEmbed = new EmbedBuilder()
-        .setTitle('🚀 **DEMONSTRAÇÃO DE COMPONENTES ORGANIZADOS**')
-        .setDescription(`
-**Esta mensagem demonstra layouts organizados de componentes Discord!**
-
-**📱 ORGANIZAÇÃO & SEÇÕES:**
-• Componentes organizados por função
-• Layout limpo e intuitivo
-• Múltiplas linhas de botões
-
-**🎛️ COMPONENTES DISPONÍVEIS:**
-• Botões primários, secundários e de perigo
-• Menus de seleção com múltiplas opções
-• Navegação e ações rápidas
-
-**✨ RECURSOS DEMONSTRADOS:**
-• Melhor organização visual
-• Responsividade aprimorada
-• Suporte a layouts complexos
-• Maior flexibilidade de design
-
-> Teste os componentes abaixo para ver a organização em ação!
-`)
-        .setColor('#5865f2')
-        .addFields(
-          { 
-            name: '🔧 **Seção de Configuração**', 
-            value: 'Use os botões abaixo para configurar preferências', 
-            inline: false 
-          },
-          { 
-            name: '📊 **Seção de Estatísticas**', 
-            value: 'Visualize dados e métricas', 
-            inline: true 
-          },
-          { 
-            name: '⚙️ **Seção Avançada**', 
-            value: 'Opções para usuários avançados', 
-            inline: true 
-          }
-        )
-        .setThumbnail(client.user.displayAvatarURL({ dynamic: true, size: 256 }))
-        .setFooter({ 
-          text: 'Layout Organizado de Componentes • discord.js v14',
-          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
-        })
-        .setTimestamp();
-
-      // Seção 1 - Ações Principais
-      const primarySection = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('components_v2_primary')
-            .setLabel('Ação Principal')
-            .setEmoji('🎯')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_secondary') 
-            .setLabel('Ação Secundária')
-            .setEmoji('🔧')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_success')
-            .setLabel('Confirmar')
-            .setEmoji('✅')
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId('components_v2_danger')
-            .setLabel('Deletar')
-            .setEmoji('🗑️')
-            .setStyle(ButtonStyle.Danger)
-        );
-
-      // Seção 2 - Menu de Seleção
-      const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId('components_v2_select')
-        .setPlaceholder('🎨 Escolha uma configuração de tema...')
-        .setMinValues(1)
-        .setMaxValues(3)
-        .addOptions([
-          {
-            label: 'Tema Escuro',
-            description: 'Interface com cores escuras para conforto visual',
-            value: 'dark_theme',
-            emoji: '🌙'
-          },
-          {
-            label: 'Tema Claro', 
-            description: 'Interface clara e minimalista',
-            value: 'light_theme',
-            emoji: '☀️'
-          },
-          {
-            label: 'Alto Contraste',
-            description: 'Melhor acessibilidade visual',
-            value: 'high_contrast',
-            emoji: '🎯'
-          },
-          {
-            label: 'Modo Compacto',
-            description: 'Layout otimizado para economizar espaço',
-            value: 'compact_mode',
-            emoji: '📱'
-          },
-          {
-            label: 'Animações',
-            description: 'Ativar efeitos visuais e transições',
-            value: 'animations',
-            emoji: '✨'
-          }
-        ]);
-
-      const selectRow = new ActionRowBuilder().addComponents(selectMenu);
-
-      // Seção 3 - Navegação
-      const navigationSection = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('components_v2_prev')
-            .setLabel('Anterior')
-            .setEmoji('⬅️')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_home')
-            .setLabel('Início')
-            .setEmoji('🏠')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_next')
-            .setLabel('Próximo')
-            .setEmoji('➡️')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_info')
-            .setLabel('Mais Info')
-            .setEmoji('ℹ️')
-            .setStyle(ButtonStyle.Primary)
-        );
-
-      // Seção 4 - Ações Rápidas
-      const quickActions = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('components_v2_save')
-            .setLabel('Salvar')
-            .setEmoji('💾')
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId('components_v2_cancel')
-            .setLabel('Cancelar')
-            .setEmoji('❌')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId('components_v2_help')
-            .setLabel('Ajuda')
-            .setEmoji('❓')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setURL('https://discord.com/developers/docs/interactions/message-components')
-            .setLabel('Documentação')
-            .setEmoji('📖')
-            .setStyle(ButtonStyle.Link)
-        );
-
-      // Enviar mensagem com layout organizado
-      await message.channel.send({
-        embeds: [mainEmbed],
-        components: [primarySection, selectRow, navigationSection, quickActions]
-      });
-
-      console.log(`Demonstração de componentes organizados enviada por ${message.author.tag} em ${message.channel.name}`);
-
-    } catch (error) {
-      console.error('Erro no comando !embedteste:', error);
-      await message.reply(`❌ **Erro ao criar demonstração:**\n\`\`\`\n${error.message}\n\`\`\`\n\n**Detalhes:**\n• Usando discord.js padrão sem flags experimentais\n• Layout organizado em 4 seções\n• Todos os componentes funcionais`);
-    }
-    return;
-  }
-
   // Comando !criarwebhook
   if (message.content.startsWith('!criarwebhook')) {
     // Verificar se o usuário tem permissão (apenas administradores)
@@ -4545,9 +3872,9 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // Verificar se a interação não expirou (mais de 2.9 segundos para dar mais margem)
+  // Verificar se a interação não expirou (mais de 2.5 segundos)
   const interactionAge = Date.now() - interaction.createdTimestamp;
-  if (interactionAge > 2900) {
+  if (interactionAge > 2500) {
     console.log(`Interação expirada (${interactionAge}ms), ignorando`);
     return;
   }
@@ -5983,7 +5310,7 @@ ${motivoRejeicao}
 `)
         .setColor('#ff0000')
 
-      await interaction.reply({ embeds: [loadingEmbed] });
+      await interaction.reply({ embeds: [loadingEmbed], ephemeral: false });
 
       try {
         const gifBuffer = await convertYouTubeToGif(youtubeUrl, parseInt(startTime), parseInt(duration));
@@ -6038,7 +5365,7 @@ ${motivoRejeicao}
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
 
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
     if (interaction.customId === 'stretch_image_modal') {
@@ -6066,7 +5393,7 @@ ${motivoRejeicao}
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
 
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
     if (interaction.customId === 'format_convert_modal') {
@@ -6093,7 +5420,7 @@ ${motivoRejeicao}
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
 
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
     if (interaction.customId === 'rename_files_modal') {
@@ -6112,62 +5439,7 @@ ${motivoRejeicao}
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode enviar múltiplos arquivos!' });
 
-      await interaction.reply({ embeds: [embed] });
-    }
-
-    // Handler para modal de feedback do conversor
-    if (interaction.customId.startsWith('conversor_feedback_modal_')) {
-      const threadId = interaction.customId.replace('conversor_feedback_modal_', '');
-      const rating = parseInt(interaction.fields.getTextInputValue('rating'));
-      const feedbackText = interaction.fields.getTextInputValue('feedback_text') || null;
-
-      // Validar nota
-      if (isNaN(rating) || rating < 1 || rating > 10) {
-        return interaction.reply({
-          content: '❌ Por favor, insira uma nota válida entre 1 e 10.',
-         flags: 1 << 6
-        });
-      }
-
-      // Verificar se o feedback já foi dado
-      if (conversorFeedbackGiven.has(threadId)) {
-        return interaction.reply({
-          content: '❌ Feedback já foi registrado para esta thread.',
-         flags: 1 << 6
-        });
-      }
-
-      // Registrar feedback
-      await registrarFeedbackConversor(threadId, interaction.user.id, rating, feedbackText);
-
-      // Cancelar timeout automático
-      if (conversorFeedbackTimers.has(threadId)) {
-        clearTimeout(conversorFeedbackTimers.get(threadId));
-        conversorFeedbackTimers.delete(threadId);
-      }
-
-      const successEmbed = new EmbedBuilder()
-        .setTitle('FEEDBACK REGISTRADO')
-        .setDescription(`
-**Obrigado pelo seu feedback!**
-
-**Sua avaliação:** ${rating}/10 ${rating >= 8 ? '⭐' : rating >= 6 ? '👍' : rating >= 4 ? '👌' : '👎'}
-${feedbackText ? `**Seu comentário:** "${feedbackText}"` : ''}
-
-Seu feedback é muito importante para melhorarmos nosso conversor!
-
-Thread será fechada em alguns segundos...
-`)
-        .setColor('#00ff88')
-        .setFooter({ text: 'GIFZADA CONVERSOR • Feedback Registrado' })
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [successEmbed] });
-
-      // Finalizar thread após 3 segundos
-      setTimeout(async () => {
-        await finalizarThreadConversor(interaction);
-      }, 3000);
+      await interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
     if (interaction.customId === 'tiktok_download_modal') {
@@ -6194,7 +5466,7 @@ Thread será fechada em alguns segundos...
         .setColor('#fe2c55')
         .setTimestamp();
 
-      await interaction.reply({ embeds: [loadingEmbed] });
+      await interaction.reply({ embeds: [loadingEmbed], ephemeral: false });
 
       try {
         const result = await downloadTikTokVideoRapidAPI(tiktokUrl);
@@ -6261,7 +5533,8 @@ Thread será fechada em alguns segundos...
       }
 
       await interaction.reply({
-        content: 'Aguarde... Baixando o vídeo...'
+        content: 'Aguarde... Baixando o vídeo...',
+        ephemeral: false
       });
 
       try {
@@ -6304,59 +5577,6 @@ Thread será fechada em alguns segundos...
         });
       }
     }
-
-    // Handler para modal de fotos para GIF
-    if (interaction.customId === 'photos_to_gif_modal') {
-      const frameDuration = parseInt(interaction.fields.getTextInputValue('frame_duration'));
-
-      // Validar duração dos frames
-      if (isNaN(frameDuration) || frameDuration < 1 || frameDuration > 30) {
-        return interaction.reply({
-          content: '❌ **Duração inválida!**\n\nA duração deve ser um número entre 1 e 30 frames.',
-          flags: 1 << 6
-        });
-      }
-
-      // Salvar configuração e aguardar imagens
-      conversaoEscolha.set(interaction.channel.id, {
-        tipo: 'photos-to-gif',
-        extraData: { frameDuration }
-      });
-
-      const instructionEmbed = new EmbedBuilder()
-        .setTitle('📸 **FOTOS PARA GIF - CONFIGURADO**')
-        .setDescription(`
-╭───────────────────────────────╮
-│   **Configuração Aplicada:**   │
-╰───────────────────────────────╯
-
-🎯 **Duração por foto:** ${frameDuration} frames
-📊 **Máximo de fotos:** 10 imagens
-🎬 **Formato final:** GIF animado
-
-## 📋 **PRÓXIMOS PASSOS:**
-
-**1.** Envie suas fotos (máximo 10)
-**2.** Arraste e solte todas de uma vez
-**3.** Aguarde o processamento automático
-
-## ⚡ **DICAS IMPORTANTES:**
-
-• **Formatos aceitos:** JPG, PNG, WEBP
-• **Tamanho recomendado:** Até 5MB por foto
-• **Qualidade:** Maior resolução = melhor resultado
-• **Ordem:** As fotos serão ordenadas por nome
-
-> 🚀 *Envie suas fotos agora para começar a conversão!*
-`)
-        .setColor('#870CFF')
-        .setThumbnail('https://cdn.discordapp.com/emojis/1366159226891931688.png')
-        .setFooter({ text: 'GIFZADA CONVERSOR • Fotos para GIF (BOOSTER)' })
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [instructionEmbed] });
-    }
-
     return;
   }
 
@@ -6379,77 +5599,6 @@ Thread será fechada em alguns segundos...
           .setRequired(true);
 
         const row1 = new ActionRowBuilder().addComponents(tiktokInput);
-        modal.addComponents(row1);
-
-        await interaction.showModal(modal);
-        return;
-      }
-
-      // Handler para opção vazia (permite reutilizar thread)
-      if (selectedOption === 'empty_option') {
-        await interaction.reply({
-          content: '🔄 **Thread reutilizada!**\n\nVocê pode agora selecionar uma nova opção de conversão.',
-          flags: 1 << 6
-        });
-        return;
-      }
-
-      // Handler para fotos para GIF (apenas boosters e cargos especiais)
-      if (selectedOption === 'photos_to_gif') {
-        // Verificar se o usuário tem algum dos cargos permitidos
-        const member = await interaction.guild.members.fetch(interaction.user.id);
-        const allowedRoles = [
-          '953748686884716574', // Booster original
-          '1065441771577937961', // Cargo adicional 1
-          '1065441772781711391',  // Cargo adicional 2
-          '1065441770562932777',  // Cargo adicional 3
-          '1065441771577937961',  // Cargo adicional 4
-        ];
-        
-        const hasPermission = allowedRoles.some(roleId => member.roles.cache.has(roleId));
-
-        if (!hasPermission) {
-          const noPermissionEmbed = new EmbedBuilder()
-            .setTitle(' **ACESSO RESTRITO**')
-            .setDescription(`
-Esta função está disponível apenas para **membros autorizados** do servidor!
-
-##  **BENEFÍCIOS DA FUNÇÃO:**
-• Acesso à função "Fotos para GIF"
-• Criação de GIFs com até 10 imagens
-• Controle total da duração de cada frame
-• Prioridade no processamento
-
-##  **CARGOS COM ACESSO:**
-• Boosters do servidor
-• Membros ativos no servidor com cargo de level
-
-> *Esta é uma função exclusiva do nosso conversor!*
-`)
-            .setColor('#ff4444')
-            .setThumbnail('https://cdn.discordapp.com/emojis/1398758670761988157.png')
-            .setFooter({ text: 'GIFZADA CONVERSOR • Função Exclusiva' })
-            .setTimestamp();
-
-          await interaction.reply({ embeds: [noPermissionEmbed], flags: 1 << 6 });
-          return;
-        }
-
-        // Mostrar modal para configurar duração dos frames
-        const modal = new ModalBuilder()
-          .setCustomId('photos_to_gif_modal')
-          .setTitle('Fotos para GIF');
-
-        const framesInput = new TextInputBuilder()
-          .setCustomId('frame_duration')
-          .setLabel('Duração de cada foto em frames (1-30)')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Ex: 10 (cada foto ficará 10 frames no GIF)')
-          .setMinLength(1)
-          .setMaxLength(2)
-          .setRequired(true);
-
-        const row1 = new ActionRowBuilder().addComponents(framesInput);
         modal.addComponents(row1);
 
         await interaction.showModal(modal);
@@ -6601,9 +5750,9 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     return;
   }
 
-  // Verificar se a interação não expirou (mais de 2.9 segundos para dar mais margem)
+  // Verificar se a interação não expirou (mais de 2.5 segundos)
   const buttonInteractionAge = Date.now() - interaction.createdTimestamp;
-  if (buttonInteractionAge > 2900) {
+  if (buttonInteractionAge > 2500) {
     console.log(`Interação de botão expirada (${buttonInteractionAge}ms), ignorando`);
     return;
   }
@@ -6616,205 +5765,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
     if (handled) return;
   }
 
-  // Handle otimização buttons
-  if (customId.startsWith('otimizar_')) {
-    const channelId = customId.split('_')[1];
-    const dadosOtimizacao = otimizacaoTentativa.get(channelId);
-    
-    if (!dadosOtimizacao) {
-      return interaction.reply({
-        content: '❌ Dados de otimização não encontrados. Tente novamente.',
-        flags: 1 << 6
-      });
-    }
-
-    await interaction.update({
-      content: '🔧 **Tentando versão otimizada...**\n\nProcessando com configurações de máxima compressão...',
-      embeds: [],
-      components: []
-    });
-
-    try {
-      // Marcar que já tentou otimização
-      otimizacaoTentativa.set(channelId, { ...dadosOtimizacao, tentouOtimizacao: true });
-
-      // Criar extraData otimizado
-      const extraDataOtimizado = { 
-        ...dadosOtimizacao.extraData, 
-        otimizado: true,
-        qualidade: 'baixa' // Força qualidade baixa para reduzir tamanho
-      };
-
-      // Processar novamente com configurações otimizadas
-      const result = await processFile(dadosOtimizacao.file, dadosOtimizacao.tipo, extraDataOtimizado);
-      const { buffer, name, temporarios } = result;
-
-      // Verificar tamanho novamente
-      const fileSizeBytes = buffer.length;
-      const fileSizeMB = fileSizeBytes / 1024 / 1024;
-      const maxOutputSize = 25;
-
-      if (fileSizeMB > maxOutputSize) {
-        await dadosOtimizacao.aguardandoMsg.edit({
-          content: `❌ **Arquivo ainda muito grande mesmo com otimização!**\n\n` +
-                  `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                  `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                  `💡 **Dica:** Mesmo com otimização máxima, o arquivo ainda é muito grande. Tente um vídeo mais curto.`,
-          embeds: []
-        });
-
-        // Limpar tudo
-        temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-        dadosOtimizacao.temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-        conversaoEscolha.delete(channelId);
-        otimizacaoTentativa.delete(channelId);
-        return;
-      }
-
-      // Sucesso! Enviar arquivo otimizado
-      const attachment = new AttachmentBuilder(buffer, { name });
-      const fileSize = fileSizeMB.toFixed(2);
-      const originalSize = dadosOtimizacao.file.size / 1024 / 1024;
-      const compression = ((originalSize - fileSizeMB) / originalSize * 100).toFixed(1);
-
-      const sucessoEmbed = new EmbedBuilder()
-        .setTitle('✅ **OTIMIZAÇÃO CONCLUÍDA COM SUCESSO!**')
-        .setDescription(`
-╭──────────────────────────────────────╮
-│   **ARQUIVO OTIMIZADO COM SUCESSO**  │
-╰──────────────────────────────────────╯
-
->  *Seu arquivo foi otimizado com compressão máxima!*
-
-##  **ESTATÍSTICAS DA OTIMIZAÇÃO:**
-
-\`\`\`yaml
- Arquivo Original: ${dadosOtimizacao.file.name}
- Arquivo Final: ${name}
- Tipo de Conversão: ${dadosOtimizacao.tipo.toUpperCase()} OTIMIZADO
- Qualidade: Reduzida para menor tamanho
- Economia de Espaço: ${compression}% menor
-\`\`\`
-
-##  **CARACTERÍSTICAS TÉCNICAS:**
-`)
-        .setColor('#ffaa00')
-        .addFields(
-          { 
-            name: '🔧 **Tamanho Final**', 
-            value: `\`${fileSize} MB\`\n*🔽 ${compression}% reduzido*`, 
-            inline: true 
-          },
-          { 
-            name: '⚙️ **Qualidade**', 
-            value: `\`Otimizada\`\n*Compressão máxima*`, 
-            inline: true 
-          },
-          { 
-            name: '📦 **Status**', 
-            value: `\`Comprimido\`\n*Tamanho reduzido*`, 
-            inline: true 
-          }
-        )
-        .setFooter({ 
-          text: 'GIFZADA CONVERSOR • Versão Otimizada', 
-          iconURL: dadosOtimizacao.message.author.displayAvatarURL({ dynamic: true }) 
-        })
-        .setTimestamp();
-
-      await dadosOtimizacao.aguardandoMsg.edit({
-        content: `${dadosOtimizacao.message.author}`,
-        embeds: [sucessoEmbed],
-        files: [attachment]
-      });
-
-      // Limpar temporários e dados
-      temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-      dadosOtimizacao.temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-      conversaoEscolha.delete(channelId);
-      otimizacaoTentativa.delete(channelId);
-
-      // Não iniciar sistema de feedback - deixar thread aberta para mais conversões
-
-    } catch (error) {
-      console.error('Erro na otimização:', error);
-      await dadosOtimizacao.aguardandoMsg.edit({
-        content: '❌ Erro durante a otimização. Tente novamente.',
-        embeds: []
-      });
-      
-      // Limpar dados
-      dadosOtimizacao.temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-      conversaoEscolha.delete(channelId);
-      otimizacaoTentativa.delete(channelId);
-    }
-    return;
-  }
-
-  if (customId.startsWith('cancelar_otimizacao_')) {
-    const channelId = customId.split('_')[2];
-    const dadosOtimizacao = otimizacaoTentativa.get(channelId);
-    
-    if (!dadosOtimizacao) {
-      return interaction.reply({
-        content: '❌ Dados de otimização não encontrados.',
-        flags: 1 << 6
-      });
-    }
-
-    await interaction.update({
-      content: `❌ **Operação cancelada pelo usuário**\n\n` +
-              `📊 **Tamanho do arquivo:** ${(dadosOtimizacao.file.size / 1024 / 1024).toFixed(2)} MB\n` +
-              `📋 **Limite Discord:** 25 MB\n\n` +
-              `💡 **Dica:** Tente novamente com um arquivo menor.`,
-      embeds: [],
-      components: []
-    });
-
-    // Limpar temporários e dados
-    dadosOtimizacao.temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-    conversaoEscolha.delete(channelId);
-    otimizacaoTentativa.delete(channelId);
-    return;
-  }
-
   if (customId === 'abrir_conversor') {
-    // Verificar se o usuário tem advertência ativa
-    const activeWarning = await hasActiveWarning(user.id);
-    if (activeWarning) {
-      const expiresAt = new Date(activeWarning.expires_at);
-      const timeLeft = Math.ceil((expiresAt - new Date()) / (1000 * 60 * 60 * 24));
-
-      const warningEmbed = new EmbedBuilder()
-        .setTitle('🚫 **ACESSO BLOQUEADO**')
-        .setDescription(`
-**Você está temporariamente impedido de usar o conversor.**
-
-**Motivo da advertência:**
-\`\`\`
-${activeWarning.reason}
-\`\`\`
-
-**⏰ INFORMAÇÕES:**
-• **Advertência aplicada:** ${new Date(activeWarning.issued_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
-• **Expira em:** ${expiresAt.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
-• **Tempo restante:** ${timeLeft} dia(s)
-
-**📋 COMO EVITAR FUTURAS ADVERTÊNCIAS:**
-• Dê feedback após usar o conversor
-• Seja construtivo em seus feedbacks
-• Use o conversor de forma responsável
-• Avalie honestamente a qualidade do serviço
-
-> 💡 *O conversor será liberado automaticamente quando a advertência expirar.*
-`)
-        .setColor('#ff4444')
-        .setFooter({ text: 'SISTEMA DE ADVERTÊNCIAS GIFZADA CONVERSOR' })
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [warningEmbed], flags: 1 << 6 });
-    }
-
     const starterMessage = await channel.send({
       content: '‎', 
       allowedMentions: { users: [] }
@@ -6913,7 +5864,7 @@ ${activeWarning.reason}
 
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId('conversion_select')
-      .setPlaceholder(' Escolha o tipo de conversão desejada')
+      .setPlaceholder('🎯 Escolha o tipo de conversão desejada')
       .addOptions([
         {
           label: 'Vídeo para GIF',
@@ -6937,37 +5888,37 @@ ${activeWarning.reason}
           label: 'Esticar Imagem',
           description: 'Redimensiona para resolução específica',
           value: 'stretch_image',
-          emoji: '<:strech:1405291831268216852>'
+          emoji: '📏'
         },
         {
           label: 'Banner Discord',
           description: 'Corta para formato 734x293px',
           value: 'discord_banner',
-          emoji: '<:discord:1405292429233487943>'
+          emoji: '🖼️'
         },
         {
           label: 'Converter Formato',
           description: 'Converte entre diferentes formatos',
           value: 'format_convert',
-          emoji: '<:convert:1405292650801926215>'
+          emoji: '🔄'
         },
         {
           label: 'Renomear Arquivos',
           description: 'Renomeia múltiplos arquivos em lote',
           value: 'rename_files',
-          emoji: '<:rename:1405292789411086473>'
+          emoji: '📝'
         },
         {
           label: 'Separar por Resolução',
           description: 'Separa PFP (1:1) e Banners automaticamente',
           value: 'separate_resolution',
-          emoji: '<:separate:1405292965466738880>'
+          emoji: '📐'
         },
         {
           label: 'Extrator de Cores',
           description: 'Extrai HEX, RGB e cores dominantes',
           value: 'color_extractor',
-          emoji: '<:pantone:1405293230634958858>'
+          emoji: '🎨'
         },
         {
           label: 'YouTube para GIF',
@@ -6980,17 +5931,6 @@ ${activeWarning.reason}
           description: 'Baixa vídeos do TikTok em HD',
           value: 'download_tiktok',
           emoji: '<:tiktok:1386523276171280495>'
-        },
-        {
-          label: 'Fotos para GIF',
-          description: 'Cria GIF com múltiplas fotos (EXCLUSIVO)',
-          value: 'photos_to_gif',
-          emoji: '<:giffile:1405293602476654793>'
-        },
-        {
-          label: '─────────────────',
-          description: 'Opção vazia para reutilizar thread',
-          value: 'empty_option',
         }
       ]);
 
@@ -7009,24 +5949,15 @@ ${activeWarning.reason}
     // Iniciar timer de inatividade para a thread
     startInactivityTimer(thread.id, user.id);
 
-    // Atualizar estatísticas do conversor (nova conversão iniciada)
-    await updateConverterStats(user.id, user.username, false, false);
-
     // Verificar se a interação ainda é válida antes de responder
     if (!interaction.replied && !interaction.deferred) {
       try {
-        // Verificar novamente se não expirou antes de responder
-        const currentAge = Date.now() - interaction.createdTimestamp;
-        if (currentAge < 2900) {
-          await interaction.reply({ content: 'Thread criada com sucesso!', flags: 1 << 6 });
-        } else {
-          console.log('Interação expirou durante processamento, mas thread foi criada com sucesso');
-        }
+        await interaction.reply({ content: 'Thread criada com sucesso!',flags: 1 << 6 });
       } catch (error) {
         console.error('Erro ao responder interação:', error);
-        // Se a interação expirou, apenas log
+        // Se a interação expirou, tentar enviar uma mensagem normal
         if (error.code === 10062) {
-          console.log('Interação expirou, mas thread foi criada com sucesso');
+          console.log('Interação expirou, thread criada com sucesso');
         }
       }
     }
@@ -7222,14 +6153,14 @@ ${activeWarning.reason}
       };
 
       const embed = new EmbedBuilder()
-        .setTitle('**OPÇÃO SELECIONADA**')
+        .setTitle('✅ **OPÇÃO SELECIONADA**')
         .setDescription(responseMessages[tipos[customId]])
         .setColor('#8804fc')
         .setFooter({ text: 'Dica: Você pode arrastar e soltar o arquivo diretamente no chat!' });
 
       try {
         if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ embeds: [embed] });
+          await interaction.reply({ embeds: [embed], ephemeral: false });
         }
       } catch (error) {
         console.error('Erro ao responder interação:', error);
@@ -7419,7 +6350,7 @@ ${activeWarning.reason}
 
     try {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply({ embeds: [embed], ephemeral: false });
       }
     } catch (error) {
       console.error('Erro ao responder interação:', error);
@@ -7429,335 +6360,7 @@ ${activeWarning.reason}
     }
   }
 
-  // Handlers para Components V2 Demo
-  if (customId.startsWith('components_v2_')) {
-    try {
-      await interaction.deferReply({ flags: 1 << 6 });
-      
-      const action = customId.split('_').slice(2).join('_'); // Remove 'components_v2_'
-      
-      let responseEmbed;
-      
-      switch (action) {
-        case 'primary':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('🎯 **AÇÃO PRINCIPAL EXECUTADA**')
-            .setDescription(`
-**Components V2 - Ação Principal**
 
-Você clicou no botão principal! Esta demonstração mostra como:
-
-• **Organizar componentes** em containers lógicos
-• **Usar diferentes estilos** de botão efetivamente  
-• **Implementar interações** com feedback claro
-• **Aproveitar a nova estrutura** de Components V2
-
-**Vantagens do Components V2:**
-✨ Layout mais organizado
-🎨 Melhor experiência visual
-📱 Responsividade aprimorada
-⚙️ Maior flexibilidade de design
-`)
-            .setColor('#5865f2')
-            .setTimestamp();
-          break;
-
-        case 'secondary':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('🔧 **AÇÃO SECUNDÁRIA EXECUTADA**')
-            .setDescription(`
-**Components V2 - Configuração**
-
-Esta é uma ação secundária de configuração.
-
-**Recursos demonstrados:**
-• Botões com estilos diferenciados
-• Feedback contextual para cada ação
-• Organização em seções lógicas
-• Components V2 com MessageFlags.IsComponentsV2
-
-**Código usado:**
-\`\`\`js
-flags: [MessageFlags.IsComponentsV2]
-\`\`\`
-`)
-            .setColor('#6c757d')
-            .setTimestamp();
-          break;
-
-        case 'success':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('✅ **CONFIRMAÇÃO EXECUTADA**')
-            .setDescription(`
-**Operação Confirmada com Sucesso!**
-
-Esta demonstração mostra como usar botões de confirmação em Components V2.
-
-**Características:**
-• Feedback imediato e claro
-• Cores que indicam o resultado
-• Organização visual aprimorada
-• Compatibilidade com discord.js v14
-
-> 🎉 Tudo funcionando perfeitamente!
-`)
-            .setColor('#28a745')
-            .setTimestamp();
-          break;
-
-        case 'danger':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('🗑️ **AÇÃO DE EXCLUSÃO SIMULADA**')
-            .setDescription(`
-**Simulação de Ação Perigosa**
-
-⚠️ Esta seria uma ação destrutiva, mas é apenas demonstração.
-
-**Boas práticas demonstradas:**
-• Cores vermelhas para ações perigosas
-• Emojis que reforçam o propósito
-• Feedback claro sobre consequências
-• Confirmações antes de ações irreversíveis
-
-> 🛡️ Em produção, adicione confirmação dupla!
-`)
-            .setColor('#dc3545')
-            .setTimestamp();
-          break;
-
-        case 'prev':
-        case 'home':
-        case 'next':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('🧭 **NAVEGAÇÃO EXECUTADA**')
-            .setDescription(`
-**Botão de Navegação: ${action.toUpperCase()}**
-
-Esta seção demonstra botões de navegação organizados.
-
-**Características dos Components V2:**
-• **Containers organizados** por função
-• **Seções visuais** bem definidas
-• **Navegação intuitiva** com feedback
-• **Layout responsivo** e limpo
-
-**Ação selecionada:** ${action === 'prev' ? 'Página Anterior' : action === 'home' ? 'Página Inicial' : 'Próxima Página'}
-`)
-            .setColor('#17a2b8')
-            .setTimestamp();
-          break;
-
-        case 'info':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('ℹ️ **INFORMAÇÕES TÉCNICAS**')
-            .setDescription(`
-**Discord Components V2 - Detalhes Técnicos**
-
-**🔧 Implementação:**
-\`\`\`js
-const { MessageFlags } = require('discord.js');
-
-await channel.send({
-  content: 'Mensagem com Components V2',
-  embeds: [embed],
-  components: [row1, row2, row3, row4],
-  flags: [MessageFlags.IsComponentsV2]
-});
-\`\`\`
-
-**📋 Recursos:**
-• Até 5 ActionRows por mensagem
-• Melhor organização visual
-• Suporte nativo no discord.js v14
-• Compatibilidade com componentes existentes
-
-**🎯 Casos de uso ideais:**
-• Painéis administrativos
-• Interfaces complexas
-• Formulários interativos
-• Sistemas de navegação
-`)
-            .setColor('#6f42c1')
-            .setTimestamp();
-          break;
-
-        case 'save':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('💾 **CONFIGURAÇÕES SALVAS**')
-            .setDescription(`
-**Dados salvos com sucesso!**
-
-Demonstração de ação de salvamento com Components V2.
-
-**✅ Itens processados:**
-• Layout e organização
-• Preferências do usuário  
-• Estados dos componentes
-• Configurações de interface
-
-**🔍 Processo:**
-1. Validação dos dados
-2. Aplicação das alterações
-3. Feedback visual
-4. Confirmação de sucesso
-
-> 💡 Em aplicações reais, aqui você salvaria no banco de dados.
-`)
-            .setColor('#28a745')
-            .setTimestamp();
-          break;
-
-        case 'cancel':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('❌ **OPERAÇÃO CANCELADA**')
-            .setDescription(`
-**Cancelamento executado**
-
-Demonstração de cancelamento gracioso.
-
-**Características:**
-• Feedback claro sobre cancelamento
-• Sem perda de estado anterior
-• Interface limpa após cancelamento
-• Botões organizados logicamente
-
-> 🔄 Você pode tentar novamente quando quiser.
-`)
-            .setColor('#6c757d')
-            .setTimestamp();
-          break;
-
-        case 'help':
-          responseEmbed = new EmbedBuilder()
-            .setTitle('❓ **SISTEMA DE AJUDA**')
-            .setDescription(`
-**Central de Ajuda - Components V2**
-
-**📚 Documentação:**
-• [Discord.js Guide](https://discordjs.guide/)
-• [Components V2 Docs](https://discord.com/developers/docs/interactions/message-components)
-• [MessageFlags Reference](https://discord-api-types.dev/api/discord-api-types-v10/enum/MessageFlags)
-
-**🛠️ Como implementar:**
-1. Importe MessageFlags do discord.js
-2. Organize componentes em ActionRows
-3. Use flags: [MessageFlags.IsComponentsV2]
-4. Implemente handlers para interações
-
-**💡 Dicas:**
-• Organize botões por função
-• Use cores apropriadas para cada ação
-• Implemente feedback claro
-• Teste em diferentes dispositivos
-`)
-            .setColor('#ffc107')
-            .setTimestamp();
-          break;
-
-        default:
-          responseEmbed = new EmbedBuilder()
-            .setTitle('🎛️ **COMPONENTS V2 DEMO**')
-            .setDescription(`
-**Interação detectada:** \`${action}\`
-
-Esta é a demonstração dos novos Discord Components V2 usando discord.js v14.
-
-**Funcionalidades testadas:**
-• Organização em containers
-• Múltiplas seções de componentes
-• Estilos variados de botões
-• Select menus configuráveis
-• MessageFlags.IsComponentsV2
-
-> ✨ Todos os componentes estão funcionando corretamente!
-`)
-            .setColor('#5865f2')
-            .setTimestamp();
-      }
-      
-      await interaction.editReply({ embeds: [responseEmbed] });
-      
-    } catch (error) {
-      console.error('Erro no handler Components V2:', error);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: `❌ Erro ao processar Components V2: ${error.message}`,
-          flags: 1 << 6
-        });
-      } else {
-        await interaction.editReply({
-          content: `❌ Erro ao processar Components V2: ${error.message}`
-        });
-      }
-    }
-    return;
-  }
-
-  // Handler para select menu Components V2
-  if (interaction.isStringSelectMenu() && customId === 'components_v2_select') {
-    try {
-      await interaction.deferReply({ flags: 1 << 6 });
-      
-      const selectedValues = interaction.values;
-      const optionNames = {
-        'dark_theme': '🌙 Tema Escuro',
-        'light_theme': '☀️ Tema Claro', 
-        'high_contrast': '🎯 Alto Contraste',
-        'compact_mode': '📱 Modo Compacto',
-        'animations': '✨ Animações'
-      };
-      
-      const selectedOptions = selectedValues.map(value => optionNames[value] || value);
-      
-      const selectEmbed = new EmbedBuilder()
-        .setTitle('🎨 **CONFIGURAÇÕES DE TEMA APLICADAS**')
-        .setDescription(`
-**Opções selecionadas:**
-${selectedOptions.map(option => `• ${option}`).join('\n')}
-
-**Components V2 - Select Menu Demo**
-
-Este select menu demonstra:
-• **Múltipla seleção** (1-3 opções)
-• **Valores customizados** com emojis
-• **Descrições detalhadas** para cada opção
-• **Feedback imediato** após seleção
-• **Integração com MessageFlags.IsComponentsV2**
-
-**Valores processados:**
-\`\`\`json
-${JSON.stringify(selectedValues, null, 2)}
-\`\`\`
-
-> 🎉 Configurações aplicadas com sucesso!
-`)
-        .setColor('#9c41ff')
-        .addFields(
-          {
-            name: '⚙️ **Configurações Ativas**',
-            value: selectedOptions.length > 0 
-              ? selectedOptions.join('\n') 
-              : 'Nenhuma opção selecionada',
-            inline: true
-          },
-          {
-            name: '📊 **Total Selecionado**', 
-            value: `${selectedValues.length}/3 opções`,
-            inline: true
-          }
-        )
-        .setTimestamp();
-        
-      await interaction.editReply({ embeds: [selectEmbed] });
-      
-    } catch (error) {
-      console.error('Erro no select menu Components V2:', error);
-      await interaction.editReply({
-        content: `❌ Erro ao processar seleção: ${error.message}`
-      });
-    }
-    return;
-  }
 
   // Handlers para botões de suporte
   if (customId === 'receba_ajuda') {
@@ -8377,34 +6980,25 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
   // Handler para encerrar thread
   if (customId === 'encerrar_thread') {
     if (interaction.channel.isThread()) {
-      // Verificar se é uma thread de conversor
-      const threadName = interaction.channel.name;
-      if (threadName.includes('Conversão -') || conversaoEscolha.has(interaction.channel.id)) {
-        // Limpar timer de inatividade
-        clearInactivityTimer(interaction.channel.id);
-        
-        // Iniciar sistema de feedback para o conversor
-        await startConversorFeedbackSystem(interaction, interaction.user.id);
-        return;
-      } else {
-        // Thread normal, encerrar sem feedback
-        clearInactivityTimer(interaction.channel.id);
-        conversaoEscolha.delete(interaction.channel.id);
+      // Limpar timer de inatividade
+      clearInactivityTimer(interaction.channel.id);
+      conversaoEscolha.delete(interaction.channel.id);
 
-        await interaction.reply({ 
-          content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
-        });
+      await interaction.reply({ 
+        content: `🔒 Thread encerrada por ${interaction.user}. A thread será trancada e arquivada.`
+      });
 
-        // Aguardar 2 segundos antes de trancar e arquivar
-        setTimeout(async () => {
-          try {
-            await interaction.channel.setLocked(true);
-            await interaction.channel.setArchived(true);
-          } catch (error) {
-            console.error('Erro ao trancar/arquivar thread:', error);
-          }
-        }, 2000);
-      }
+      // Aguardar 2 segundos antes de trancar e arquivar
+      setTimeout(async () => {
+        try {
+          // Trancar a thread primeiro
+          await interaction.channel.setLocked(true);
+          // Depois arquivar
+          await interaction.channel.setArchived(true);
+        } catch (error) {
+          console.error('Erro ao trancar/arquivar thread:', error);
+        }
+      }, 2000);
     } else {
       await interaction.reply({ 
         content: '❌ Este comando só pode ser usado dentro de uma thread de conversão.', 
@@ -8758,45 +7352,6 @@ Thread será fechada em alguns segundos...
     setTimeout(async () => {
       await finalizarTicket(interaction, assignment);
     }, 3000);
-  }
-
-  // Handler para feedback do conversor
-  if (customId.startsWith('conversor_feedback_')) {
-    const threadId = customId.replace('conversor_feedback_', '');
-
-    // Verificar se o feedback já foi dado
-    if (conversorFeedbackGiven.has(threadId)) {
-      return interaction.reply({
-        content: '❌ Feedback já foi registrado para esta thread.',
-       flags: 1 << 6
-      });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId(`conversor_feedback_modal_${threadId}`)
-      .setTitle('💬 Feedback do Conversor');
-
-    const ratingInput = new TextInputBuilder()
-      .setCustomId('rating')
-      .setLabel('Nota de 1 a 10')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Digite um número de 1 a 10')
-      .setMinLength(1)
-      .setMaxLength(2)
-      .setRequired(true);
-
-    const feedbackInput = new TextInputBuilder()
-      .setCustomId('feedback_text')
-      .setLabel('Comentário (opcional)')
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('Compartilhe sua experiência com o conversor...')
-      .setRequired(false);
-
-    const row1 = new ActionRowBuilder().addComponents(ratingInput);
-    const row2 = new ActionRowBuilder().addComponents(feedbackInput);
-    modal.addComponents(row1, row2);
-
-    await interaction.showModal(modal);
   }
 
   // Handlers para sistema de banimento
@@ -10902,7 +9457,7 @@ client.on('messageCreate', async message => {
   if (!tipoData || !file) return;
 
   // Lidar com objeto ou string
-  const tipo = typeof tipoData === 'object' ? (tipoData.tipo || tipoData.type) : tipoData;
+  const tipo = typeof tipoData === 'object' ? tipoData.type : tipoData;
   const extraData = typeof tipoData === 'object' ? tipoData : null;
 
   // Validar formato do arquivo antes do processamento
@@ -10920,8 +9475,7 @@ client.on('messageCreate', async message => {
     'format-convert': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff'],
     'rename-files': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.mp4', '.avi', '.mov'],
     'separate-resolution': ['.png', '.jpg', '.jpeg', '.webp', '.bmp'],
-    'color-extractor': ['.png', '.jpg', '.jpeg', '.webp', '.bmp'],
-    'photos-to-gif': ['.png', '.jpg', '.jpeg', '.webp', '.bmp']
+    'color-extractor': ['.png', '.jpg', '.jpeg', '.webp', '.bmp']
   };
 
   const formatosPermitidos = formatosAceitos[tipo] || [];
@@ -10938,8 +9492,7 @@ client.on('messageCreate', async message => {
       'format-convert': 'Converter Formato',
       'rename-files': 'Renomear Arquivos',
       'separate-resolution': 'Separar por Resolução',
-      'color-extractor': 'Extrator de Cores',
-      'photos-to-gif': 'Fotos para GIF'
+      'color-extractor': 'Extrator de Cores'
     }[tipo] || tipo;
 
     const errorEmbed = new EmbedBuilder()
@@ -10976,58 +9529,7 @@ ${formatosTexto}
     return;
   }
 
-  // Handle discord-banner com verificação antecipada (antes da mensagem de processamento)
-  if (tipo === 'discord-banner') {
-    // Criar mensagem temporária apenas para banner
-    const tempMsg = await message.channel.send({
-      content: '⏳ Verificando dimensões da imagem para banner...'
-    });
-
-    // Create a temporary interaction-like object for the createBannerCropSession function
-    const interactionObject = {
-      editReply: async (options) => {
-        await tempMsg.edit(options);
-      },
-      user: message.author
-    };
-    
-    await createBannerCropSession(interactionObject, file);
-    conversaoEscolha.delete(message.channel.id);
-    return;
-  }
-
-  // Handle fotos para GIF (processar múltiplas imagens)
-  if (tipo === 'photos-to-gif') {
-    // Coletar todas as imagens enviadas na mensagem
-    const allImages = Array.from(message.attachments.values()).filter(attachment => {
-      const fileName = attachment.name.toLowerCase();
-      const fileExtension = fileName.match(/\.[^.]*$/)?.[0];
-      return formatosAceitos['photos-to-gif'].includes(fileExtension);
-    });
-
-    // Verificar se há imagens válidas
-    if (allImages.length === 0) {
-      await message.reply({
-        content: '❌ **Nenhuma imagem válida encontrada!**\n\nEnvie pelo menos uma imagem nos formatos: PNG, JPG, JPEG, WEBP, BMP'
-      });
-      return;
-    }
-
-    // Verificar limite máximo
-    if (allImages.length > 10) {
-      await message.reply({
-        content: `❌ **Muitas imagens!**\n\nMáximo: 10 imagens\nEnviadas: ${allImages.length}\n\nEnvie no máximo 10 imagens por vez.`
-      });
-      return;
-    }
-
-    // Processar fotos para GIF
-    await processPhotosToGif(message, allImages, extraData.extraData.frameDuration);
-    conversaoEscolha.delete(message.channel.id);
-    return;
-  }
-
-  // Criar mensagem de processamento com progresso visual (apenas para outros tipos)
+  // Criar mensagem de processamento com progresso visual
   const processEmbed = new EmbedBuilder()
     .setTitle('⏳ **PROCESSAMENTO EM ANDAMENTO**')
     .setDescription(`
@@ -11094,7 +9596,20 @@ ${formatosTexto}
       return;
     }
 
-    // discord-banner já foi processado anteriormente
+    // Handle discord-banner with interactive crop system
+    if (tipo === 'discord-banner') {
+      // Create a temporary interaction-like object for the createBannerCropSession function
+      const interactionObject = {
+        editReply: async (options) => {
+          await aguardandoMsg.edit(options);
+        },
+        user: message.author
+      };
+      
+      await createBannerCropSession(interactionObject, file);
+      conversaoEscolha.delete(message.channel.id);
+      return;
+    }
 
     const result = await processFile(file, tipo, extraData);
     const { buffer, name, temporarios } = result;
@@ -11107,71 +9622,17 @@ ${formatosTexto}
     const maxOutputSize = 25; // MB
 
     if (fileSizeMB > maxOutputSize) {
-      // Verificar se já tentou otimização
-      const jaTentouOtimizacao = otimizacaoTentativa.has(message.channel.id);
-      
-      if (jaTentouOtimizacao) {
-        // Se já tentou otimização, apenas mostrar erro final
-        await aguardandoMsg.edit({
-          content: `❌ **Arquivo convertido muito grande mesmo com otimização!**\n\n` +
-                  `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
-                  `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
-                  `💡 **Dica:** Mesmo com otimização máxima, o arquivo ainda é muito grande. Tente um vídeo mais curto.`,
-          embeds: []
-        });
-
-        // Limpar arquivos temporários e mapas
-        temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
-        conversaoEscolha.delete(message.channel.id);
-        otimizacaoTentativa.delete(message.channel.id);
-        return;
-      }
-
-      // Primeira vez que falha - oferecer otimização
-      const botaoOtimizacao = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`otimizar_${message.channel.id}`)
-          .setLabel('Sim')
-          .setEmoji('✅')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`cancelar_otimizacao_${message.channel.id}`)
-          .setLabel('Não')
-          .setEmoji('❌')
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      const otimizacaoEmbed = new EmbedBuilder()
-        .setTitle('❌ **ARQUIVO CONVERTIDO MUITO GRANDE!**')
-        .setDescription(`
-📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB
-📋 **Limite Discord:** ${maxOutputSize} MB
-
-💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.
-
-🔧 **Quer tentar a versão mais otimizada?**
-*(Pode reduzir a qualidade, mas diminui o tamanho)*
-`)
-        .setColor('#ff4444')
-        .setFooter({ text: 'GIFZADA CONVERSOR • Otimização Disponível' })
-        .setTimestamp();
-
       await aguardandoMsg.edit({
-        content: `${message.author}`,
-        embeds: [otimizacaoEmbed],
-        components: [botaoOtimizacao]
+        content: `❌ **Arquivo convertido muito grande!**\n\n` +
+                `📊 **Tamanho final:** ${fileSizeMB.toFixed(2)} MB\n` +
+                `📋 **Limite Discord:** ${maxOutputSize} MB\n\n` +
+                `💡 **Dica:** O arquivo aumentou durante a conversão. Tente um vídeo mais curto.`,
+        embeds: []
       });
 
-      // Armazenar dados para possível otimização
-      otimizacaoTentativa.set(message.channel.id, {
-        file: file,
-        tipo: tipo,
-        extraData: extraData,
-        aguardandoMsg: aguardandoMsg,
-        message: message,
-        temporarios: temporarios
-      });
-
+      // Limpar arquivos temporários
+      temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
+      conversaoEscolha.delete(message.channel.id);
       return;
     }
 
@@ -11329,15 +9790,6 @@ async function processFile(attachment, type, extraData = null) {
       fs.writeFileSync(tempInput, videoBuffer);
       temporarios.push(tempInput, tempOutput);
 
-      // Verificar se é modo otimizado
-      const isOptimized = extraData && extraData.otimizado;
-      
-      // Configurações baseadas no modo
-      const scale = isOptimized ? '320:-1' : '420:-1'; // Menor resolução se otimizado
-      const fps = isOptimized ? '10' : '15'; // Menor FPS se otimizado
-      const maxColors = isOptimized ? '128' : '256'; // Menos cores se otimizado
-      const duration = isOptimized ? '8' : '10'; // Menor duração se otimizado
-
       // Conversão em duas passadas para máxima qualidade
       const tempPalette = `temp_palette_${nomeBase}.png`;
       temporarios.push(tempPalette);
@@ -11346,8 +9798,8 @@ async function processFile(attachment, type, extraData = null) {
       await new Promise((resolve, reject) => {
         ffmpeg(tempInput)
           .outputOptions([
-            '-vf', `scale=${scale}:flags=lanczos,fps=${fps},palettegen=max_colors=${maxColors}:reserve_transparent=0`,
-            '-t', duration
+            '-vf', 'scale=420:-1:flags=lanczos,fps=15,palettegen=max_colors=256:reserve_transparent=0',
+            '-t', '10'
           ])
           .on('end', resolve)
           .on('error', reject)
@@ -11355,14 +9807,13 @@ async function processFile(attachment, type, extraData = null) {
       });
 
       // Segunda passada: aplicar paleta e gerar GIF final
-      const bayerScale = isOptimized ? '5' : '3'; // Mais dithering se otimizado
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(tempInput)
           .input(tempPalette)
           .outputOptions([
-            '-filter_complex', `scale=${scale}:flags=lanczos,fps=${fps}[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=${bayerScale}`,
-            '-t', duration,
+            '-filter_complex', 'scale=420:-1:flags=lanczos,fps=15[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=3',
+            '-t', '10',
             '-loop', '0'
           ])
           .on('end', resolve)
@@ -11371,7 +9822,7 @@ async function processFile(attachment, type, extraData = null) {
       });
 
       const gif = fs.readFileSync(tempOutput);
-      return { buffer: gif, name: `convertido_${isOptimized ? 'otimizado' : 'hd'}.gif`, temporarios };
+      return { buffer: gif, name: `convertido.gif`, temporarios };
     }
 
     case 'resize-gif': {
@@ -11387,18 +9838,11 @@ async function processFile(attachment, type, extraData = null) {
       fs.writeFileSync(input, buffer);
       temporarios.push(input, output);
 
-      // Verificar se é modo otimizado
-      const isOptimized = extraData && extraData.otimizado;
-      
-      // Calcular escala baseada na porcentagem e modo
-      let optimizationPercentage = (extraData && extraData.percentage) || 70;
-      if (isOptimized) {
-        optimizationPercentage = Math.max(optimizationPercentage, 85); // Mínimo 85% de redução se otimizado
-      }
-      
-      const scale = (100 - optimizationPercentage) / 100;
-      const lossyValue = Math.min(optimizationPercentage * (isOptimized ? 3 : 2), 200); // Mais lossy se otimizado
-      const colorsValue = Math.max(256 - (optimizationPercentage * (isOptimized ? 3 : 2)), 16); // Menos cores se otimizado
+      // Calcular escala baseada na porcentagem (se não fornecida, usar 70% como padrão)
+      const optimizationPercentage = (extraData && extraData.percentage) || 70;
+      const scale = (100 - optimizationPercentage) / 100; // Converte porcentagem de redução para escala
+      const lossyValue = Math.min(optimizationPercentage * 2, 200); // Ajustar lossy baseado na porcentagem
+      const colorsValue = Math.max(256 - (optimizationPercentage * 2), 32); // Reduzir cores baseado na porcentagem
 
       await new Promise((resolve, reject) => {
         execFile(gifsicle, [
@@ -11415,7 +9859,7 @@ async function processFile(attachment, type, extraData = null) {
       });
 
       const resized = fs.readFileSync(output);
-      return { buffer: resized, name: `convertido_${isOptimized ? 'otimizado' : 'comprimido'}.gif`, temporarios };
+      return { buffer: resized, name: `convertido.gif`, temporarios };
     }
 
     case 'stretch-image': {
@@ -11458,41 +9902,98 @@ async function processFile(attachment, type, extraData = null) {
     }
 
     case 'discord-banner': {
-      // Usar sistema interativo do bannerCrop
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      
-      // Verificar se é uma imagem
-      if (!attachment.contentType?.startsWith('image/')) {
-        throw new Error('Por favor, envie apenas arquivos de imagem!');
+
+      const isGif = attachment.name.toLowerCase().endsWith('.gif') || attachment.contentType === 'image/gif';
+
+      if (isGif) {
+        const inputPath = `banner_${nomeBase}.gif`;
+        const outputPath = `banner_out_${nomeBase}.gif`;
+        fs.writeFileSync(inputPath, buffer);
+        temporarios.push(inputPath, outputPath);
+
+        // Obter dimensões do GIF
+        const metadata = await sharp(buffer, { animated: false }).metadata();
+        const { width, height } = metadata;
+
+        // Calcular crop para 734x293 (proporção do banner do Discord)
+        const targetWidth = 734;
+        const targetHeight = 293;
+        const targetRatio = targetWidth / targetHeight;
+        const currentRatio = width / height;
+
+        let cropWidth, cropHeight, left, top;
+
+        if (currentRatio > targetRatio) {
+          // Imagem mais larga, cortar largura
+          cropHeight = height;
+          cropWidth = Math.round(height * targetRatio);
+          left = Math.round((width - cropWidth) / 2);
+          top = 0;
+        } else {
+          // Imagem mais alta, cortar altura
+          cropWidth = width;
+          cropHeight = Math.round(width / targetRatio);
+          left = 0;
+          top = Math.round((height - cropHeight) / 2);
+        }
+
+        if (!gifsicle) {
+          throw new Error('Gifsicle não está disponível. Tente novamente em alguns segundos.');
+        }
+
+        await new Promise((resolve, reject) => {
+          execFile(gifsicle, [
+            '--crop', `${left},${top}+${cropWidth}x${cropHeight}`,
+            '--resize', `${targetWidth}x${targetHeight}`,
+            inputPath, 
+            '-o', outputPath
+          ], err => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+
+        const bannerGif = fs.readFileSync(outputPath);
+        return { buffer: bannerGif, name: `banner_discord.gif`, temporarios };
+      } else {
+        const metadata = await sharp(buffer).metadata();
+        const { width, height } = metadata;
+
+        // Calcular crop para banner do Discord
+        const targetWidth = 734;
+        const targetHeight = 293;
+        const targetRatio = targetWidth / targetHeight;
+        const currentRatio = width / height;
+
+        let cropWidth, cropHeight, left, top;
+
+        if (currentRatio > targetRatio) {
+          cropHeight = height;
+          cropWidth = Math.round(height * targetRatio);
+          left = Math.round((width - cropWidth) / 2);
+          top = 0;
+        } else {
+          cropWidth = width;
+          cropHeight = Math.round(width / targetRatio);
+          left = 0;
+          top = Math.round((height - cropHeight) / 2);
+        }
+
+        const extension = attachment.name.split('.').pop().toLowerCase();
+        const bannerImage = await sharp(buffer)
+          .extract({ left, top, width: cropWidth, height: cropHeight })
+          .resize(targetWidth, targetHeight)
+          .toBuffer();
+
+        return { 
+          buffer: bannerImage, 
+          name: `banner_discord.${extension}`, 
+          temporarios: [] 
+        };
       }
-
-      // Verificar tamanho do arquivo (máximo 8MB)
-      if (attachment.size > 8 * 1024 * 1024) {
-        throw new Error('A imagem é muito grande! Máximo 8MB.');
-      }
-
-      // Criar objeto de pseudo-interação para compatibilidade
-      const interactionObject = {
-        editReply: async (options) => {
-          // Retornar mensagem para processar através do sistema principal
-          return { interactiveSession: true, options };
-        },
-        user: { id: 'user_interactive' }
-      };
-
-      // Iniciar sessão interativa de banner crop
-      const sessionResult = await createBannerCropSession(interactionObject, attachment);
-      
-      // Retornar indicador de que deve usar sistema interativo
-      return { 
-        interactive: true,
-        sessionResult,
-        buffer: buffer, 
-        name: `banner_interactive.png`, 
-        temporarios: [] 
-      };
     }
 
     case 'format-convert': {
@@ -12082,261 +10583,6 @@ async function convertYouTubeToGif(url, startTime = 0, duration = 5) {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     });
     throw error;
-  }
-}
-
-// Função para processar múltiplas fotos para GIF
-async function processPhotosToGif(message, images, frameDuration) {
-  const nomeBase = Date.now();
-  const temporarios = [];
-
-  try {
-    // Criar mensagem de processamento
-    const processEmbed = new EmbedBuilder()
-      .setTitle('📸 **PROCESSANDO FOTOS PARA GIF**')
-      .setDescription(`
-╭─────────────────────────────────╮
-│   **Criando GIF com fotos...**  │
-╰─────────────────────────────────╯
-
-\`\`\`yaml
-📸 Fotos recebidas: ${images.length}
-🎯 Frames por foto: ${frameDuration}
-⏱️ Status: Baixando imagens...
-\`\`\`
-
-**PROGRESSO:**
-\`██████████\` 100% - Preparando fotos...
-
-`)
-      .setColor('#ffaa00')
-      .setFooter({ text: '⚡ Sistema de conversão gifzada • BOOSTER ONLY' })
-      .setTimestamp();
-
-    const aguardandoMsg = await message.channel.send({ embeds: [processEmbed] });
-
-    // Baixar e processar todas as imagens
-    const imageBuffers = [];
-    for (let i = 0; i < images.length; i++) {
-      const image = images[i];
-      
-      // Atualizar progresso imediatamente
-      try {
-        const progressEmbed = new EmbedBuilder()
-          .setTitle('📸 **PROCESSANDO FOTOS PARA GIF**')
-          .setDescription(`
-╭─────────────────────────────────╮
-│   **Processando foto ${i + 1}/${images.length}**  │
-╰─────────────────────────────────╯
-
-\`\`\`yaml
-📸 Fotos recebidas: ${images.length}
-🎯 Frames por foto: ${frameDuration}
-⏱️ Status: Baixando imagem ${i + 1}...
-\`\`\`
-
-**PROGRESSO:**
-\`${'█'.repeat(Math.floor((i + 1) / images.length * 10))}${'░'.repeat(10 - Math.floor((i + 1) / images.length * 10))}\` ${Math.floor((i + 1) / images.length * 100)}% - Processando...
-
-`)
-          .setColor('#8804fc')
-          .setFooter({ text: '⚡ Sistema de conversão gifzada • BOOSTER ONLY' })
-          .setTimestamp();
-        
-        await aguardandoMsg.edit({ embeds: [progressEmbed] });
-      } catch (err) {
-        // Ignore if message was deleted
-      }
-
-      try {
-        const response = await fetch(image.url);
-        if (!response.ok) {
-          throw new Error(`Falha ao baixar imagem ${i + 1}: ${response.status}`);
-        }
-        
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-
-        // Verificar se é uma imagem válida antes de processar
-        const metadata = await sharp(buffer).metadata();
-        if (!metadata.width || !metadata.height) {
-          throw new Error(`Imagem ${i + 1} é inválida ou corrompida`);
-        }
-
-        // Redimensionar e padronizar todas as imagens para 720p
-        const processedImage = await sharp(buffer)
-          .resize(720, 720, { 
-            fit: 'inside', 
-            withoutEnlargement: false 
-          })
-          .jpeg({ quality: 95 })
-          .toBuffer();
-
-        imageBuffers.push(processedImage);
-      } catch (imageError) {
-        console.error(`Erro ao processar imagem ${i + 1}:`, imageError);
-        throw new Error(`Imagem ${i + 1} não pode ser processada: ${imageError.message}`);
-      }
-    }
-
-    // Criar frames individuais e depois converter para GIF
-    const frameFiles = [];
-    
-    for (let i = 0; i < imageBuffers.length; i++) {
-      // Criar múltiplos frames da mesma imagem baseado na duração
-      for (let f = 0; f < frameDuration; f++) {
-        const frameFile = `frame_${nomeBase}_${i}_${f}.jpg`;
-        fs.writeFileSync(frameFile, imageBuffers[i]);
-        frameFiles.push(frameFile);
-        temporarios.push(frameFile);
-      }
-    }
-
-    // Atualizar progresso para conversão final
-    const finalProgressEmbed = processEmbed
-      .setDescription(`
-╭─────────────────────────────────╮
-│   **Gerando GIF final...**      │
-╰─────────────────────────────────╯
-
-\`\`\`yaml
-📸 Fotos processadas: ${images.length}
-🎬 Total de frames: ${frameFiles.length}
-⏱️ Status: Criando GIF animado...
-\`\`\`
-
-**PROGRESSO:**
-\`██████████\` 100% - Finalizando...
-
-`)
-      .setColor('#00ff88');
-    
-    await aguardandoMsg.edit({ embeds: [finalProgressEmbed] });
-
-    // Converter frames para GIF usando ffmpeg
-    const outputGif = `photos_gif_${nomeBase}.gif`;
-    temporarios.push(outputGif);
-
-    // Criar um vídeo temporário primeiro, depois converter para GIF
-    const tempVideo = `temp_video_${nomeBase}.mp4`;
-    temporarios.push(tempVideo);
-    
-    // Criar lista de arquivos para ffmpeg
-    const fileListPath = `filelist_${nomeBase}.txt`;
-    const fileListContent = frameFiles.map(file => `file '${file}'\nduration ${1/15}`).join('\n') + '\nfile ' + frameFiles[frameFiles.length - 1];
-    fs.writeFileSync(fileListPath, fileListContent);
-    temporarios.push(fileListPath);
-    
-    // Primeiro: criar vídeo temporário
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(fileListPath)
-        .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions([
-          '-c:v', 'libx264',
-          '-r', '15',
-          '-pix_fmt', 'yuv420p',
-          '-vf', 'scale=720:-2',
-          '-y'
-        ])
-        .on('end', resolve)
-        .on('error', (err) => {
-          console.error('Erro ao criar vídeo temporário:', err);
-          reject(err);
-        })
-        .save(tempVideo);
-    });
-    
-    // Segundo: converter vídeo para GIF com paleta otimizada
-    await new Promise((resolve, reject) => {
-      ffmpeg(tempVideo)
-        .outputOptions([
-          '-vf', 'fps=15,scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3',
-          '-loop', '0',
-          '-y'
-        ])
-        .on('end', resolve)
-        .on('error', (err) => {
-          console.error('Erro ao converter para GIF:', err);
-          reject(err);
-        })
-        .save(outputGif);
-    });
-
-    // Ler GIF final
-    const gifBuffer = fs.readFileSync(outputGif);
-    const fileSizeMB = gifBuffer.length / 1024 / 1024;
-
-    // Criar resultado
-    const resultEmbed = new EmbedBuilder()
-      .setTitle('📸 **GIF CRIADO COM SUCESSO!**')
-      .setDescription(`
-╭─────────────────────────────────╮
-│   **Fotos convertidas!**        │
-╰─────────────────────────────────╯
-
-\`\`\`yaml
-📸 Fotos usadas: ${images.length}
-🎬 Frames total: ${frameFiles.length}
-🎯 Duração/foto: ${frameDuration} frames
-📊 Tamanho final: ${fileSizeMB.toFixed(2)} MB
-🎨 Qualidade: HD (720p)
-⚡ FPS: 15
-\`\`\`
-
-> 🎉 *Seu GIF personalizado está pronto!*
-`)
-      .setColor('#00ff88')
-      .setFooter({ text: 'GIFZADA CONVERSOR • Fotos para GIF (BOOSTER)' })
-      .setTimestamp();
-
-    const attachment = new AttachmentBuilder(gifBuffer, { 
-      name: `fotos_para_gif_${images.length}_fotos.gif` 
-    });
-
-    // Pequeno delay para evitar conflito com updates de progresso
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    await aguardandoMsg.edit({
-      content: `${message.author}`,
-      embeds: [resultEmbed],
-      files: [attachment],
-      components: [] // Remover qualquer componente anterior
-    });
-
-    // Registrar conversão bem-sucedida
-    await updateConverterStats(message.author.id, message.author.username, true, false);
-
-  } catch (error) {
-    console.error('Erro ao processar fotos para GIF:', error);
-    
-    const errorEmbed = new EmbedBuilder()
-      .setTitle('❌ **ERRO NO PROCESSAMENTO**')
-      .setDescription(`
-Não foi possível criar o GIF com suas fotos.
-
-**Erro:** ${error.message}
-
-**Possíveis soluções:**
-• Certifique-se de que todas as imagens são válidas
-• Tente com menos imagens (máximo 10)
-• Verifique se as imagens não são muito grandes
-`)
-      .setColor('#ff4444')
-      .setTimestamp();
-
-    await message.channel.send({ embeds: [errorEmbed] });
-  } finally {
-    // Limpar arquivos temporários
-    temporarios.forEach(file => {
-      if (fs.existsSync(file)) {
-        try {
-          fs.unlinkSync(file);
-        } catch (err) {
-          // Ignore cleanup errors
-        }
-      }
-    });
   }
 }
 
