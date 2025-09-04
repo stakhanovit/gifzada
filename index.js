@@ -3449,6 +3449,53 @@ Selecione uma área para acessar suas funções específicas:
     await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
   }
 
+  // Comando !shardcloud
+  if (message.content === '!shardcloud') {
+    try {
+      // Apagar o comando
+      await message.delete();
+
+      const shardCloudEmbed = new EmbedBuilder()
+        .setTitle('Shard Cloud')
+        .setDescription(`
+A **hospedagem grátis** que vai colocar sua **aplicação** ou **site** no ar em segundos!
+
+Por que escolher a \`Shard Cloud\`?
+- **Suporte 24/7** diretamente em nossa comunidade do Discord
+- **Deploy em 1 minuto**: suba sua aplicação ou banco de dados sem complicação
+- **Painel intuitivo**: controle tudo de forma simples e rápida
+- **Performance garantida** com servidores otimizados
+
+Comece agora mesmo: basta criar sua conta e aproveitar \`3 meses grátis\` de hospedagem!
+`)
+        .setColor('#00D4FF')
+        .setImage('https://media.discordapp.net/attachments/1385367538409410723/1413208920444506142/og-image.png?ex=68bb18de&is=68b9c75e&hm=bca4b7fe481ba6b144e1c3d026cb9e1906ff42d7bee6f1348a2b0dcbed6d7703&=&format=webp&quality=lossless&width=1050&height=552')
+        .setTimestamp();
+
+      const shardCloudButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setURL('https://shardcloud.app/pt-br')
+          .setLabel('Site')
+          .setEmoji('<:ShardCloud:1413204576164778025>')
+          .setStyle(ButtonStyle.Link),
+        new ButtonBuilder()
+          .setURL('https://discord.gg/shardcloud')
+          .setLabel('Discord')
+          .setEmoji('<:h_discordlogo:1413204643814838286>')
+          .setStyle(ButtonStyle.Link)
+      );
+
+      await message.channel.send({
+        embeds: [shardCloudEmbed],
+        components: [shardCloudButtons]
+      });
+
+    } catch (error) {
+      console.error('Erro no comando !shardcloud:', error);
+    }
+    return;
+  }
+
   // Comando !conversorestats
   if (message.content === '!conversorestats') {
     try {
