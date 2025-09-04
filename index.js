@@ -3468,8 +3468,12 @@ Por que escolher a \`Shard Cloud\`?
 
 Comece agora mesmo: basta criar sua conta e aproveitar \`3 meses grátis\` de hospedagem!
 `)
-        .setColor('#00D4FF')
+        .setColor('#b9a7ff')
         .setImage('https://media.discordapp.net/attachments/1385367538409410723/1413208920444506142/og-image.png?ex=68bb18de&is=68b9c75e&hm=bca4b7fe481ba6b144e1c3d026cb9e1906ff42d7bee6f1348a2b0dcbed6d7703&=&format=webp&quality=lossless&width=1050&height=552')
+        .setFooter({ 
+          text: 'Shard Cloud — hospedagem grátis, rápida e confiável.',
+          iconURL: message.guild.iconURL({ dynamic: true, size: 64 })
+        })
         .setTimestamp();
 
       const shardCloudButtons = new ActionRowBuilder().addComponents(
