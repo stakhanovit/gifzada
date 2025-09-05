@@ -2385,6 +2385,35 @@ Esta foi a postagem que mais recebeu curtidas na última semana:
   }
 }
 
+// Sistema de boas-vindas com menção temporária
+client.on('guildMemberAdd', async member => {
+  try {
+    const welcomeChannelId = '1413234213876142140';
+    const welcomeChannel = client.channels.cache.get(welcomeChannelId);
+    
+    if (!welcomeChannel) {
+      console.log('Canal de boas-vindas não encontrado');
+      return;
+    }
+
+    // Enviar menção
+    const mentionMessage = await welcomeChannel.send(`${member}`);
+    
+    // Deletar a menção após 1 segundo
+    setTimeout(async () => {
+      try {
+        await mentionMessage.delete();
+      } catch (error) {
+        console.error('Erro ao deletar mensagem de boas-vindas:', error);
+      }
+    }, 1000);
+
+    console.log(`Membro ${member.user.tag} mencionado no canal de boas-vindas`);
+  } catch (error) {
+    console.error('Erro no sistema de boas-vindas:', error);
+  }
+});
+
 client.on('messageCreate', async message => {
   // Sistema de pontos automático multi-servidor
   if (!message.author.bot) {
