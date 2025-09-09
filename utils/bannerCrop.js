@@ -230,12 +230,12 @@ async function generateBannerPreview(session) {
                 <text x="${overlayWidth/2}" y="${overlayHeight/2}" 
                       text-anchor="middle" dominant-baseline="middle" 
                       fill="white" stroke="black" stroke-width="1" 
-                      font-size="${Math.max(12, 20 * session.zoomScale)}" font-family="Arial" font-weight="bold">
+                      font-size="${Math.max(12, 20 * session.zoomScale)}" font-family="Arial Bold" font-weight="bold">
                       Banner ${BANNER_WIDTH}x${BANNER_HEIGHT}
                 </text>
                 <text x="10" y="${Math.max(15, 25 * session.zoomScale)}" 
                       fill="white" stroke="black" stroke-width="1" 
-                      font-size="${Math.max(10, 16 * session.zoomScale)}" font-family="Arial" font-weight="bold">
+                      font-size="${Math.max(10, 16 * session.zoomScale)}" font-family="Arial Bold" font-weight="bold">
                       Área: ${overlayWidth}x${overlayHeight}px | Zoom: ${(session.zoomScale * 100).toFixed(0)}%
                 </text>
             </svg>
@@ -261,16 +261,16 @@ async function generateBannerPreview(session) {
         const simpleSvg = `
             <svg width="400" height="200">
                 <rect width="400" height="200" fill="white" stroke="black" stroke-width="2"/>
-                <text x="200" y="70" text-anchor="middle" font-size="18" font-family="Arial">
+                <text x="200" y="70" text-anchor="middle" font-size="18" font-family="Arial Bold">
                     Banner Crop Preview
                 </text>
-                <text x="200" y="100" text-anchor="middle" font-size="14" font-family="Arial">
+                <text x="200" y="100" text-anchor="middle" font-size="14" font-family="Arial Bold">
                     Image: ${session.originalWidth}x${session.originalHeight}px
                 </text>
-                <text x="200" y="125" text-anchor="middle" font-size="14" font-family="Arial">
+                <text x="200" y="125" text-anchor="middle" font-size="14" font-family="Arial Bold">
                     Banner: ${BANNER_WIDTH}x${BANNER_HEIGHT}px
                 </text>
-                <text x="200" y="150" text-anchor="middle" font-size="14" font-family="Arial">
+                <text x="200" y="150" text-anchor="middle" font-size="14" font-family="Arial Bold">
                     Position: X:${session.cropX} Y:${session.cropY}
                 </text>
             </svg>
