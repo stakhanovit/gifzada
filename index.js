@@ -1462,13 +1462,12 @@ async function finalizarThreadConversor(interaction, channel = null) {
     clearInactivityTimer(threadId);
     conversaoEscolha.delete(threadId);
 
-    // Aguardar 2 segundos antes de trancar e arquivar
+    // Aguardar 2 segundos antes de deletar a thread
     setTimeout(async () => {
       try {
-        await targetChannel.setLocked(true);
-        await targetChannel.setArchived(true);
+        await targetChannel.delete();
       } catch (error) {
-        console.error('Erro ao arquivar thread do conversor:', error);
+        console.error('Erro ao deletar thread do conversor:', error);
       }
     }, 2000);
 
@@ -11789,7 +11788,7 @@ async function processFile(attachment, type, extraData = null) {
 
         // Adicionar texto com o valor HEX
         const textColor = (color.r + color.g + color.b) > 384 ? '#000000' : '#ffffff';
-        svgContent += `<text x="${x + colorWidth/2}" y="${paletteHeight/2 + 5}" text-anchor="middle" fill="${textColor}" font-family="Arial" font-size="12">${hex}</text>`;
+        svgContent += `<text x="${x + colorWidth/2}" y="${paletteHeight/2 + 5}" text-anchor="middle" fill="${textColor}" font-family="Arial Bold" font-size="12">${hex}</text>`;
       });
 
       svgContent += '</svg>';
