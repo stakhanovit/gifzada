@@ -53,8 +53,17 @@ const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
 const { createBannerCropSession, handleBannerCropButton } = require('./utils/bannerCrop');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 require('dotenv').config();
+
+// Registrar fonte personalizada para uso no Canvas
+try {
+  registerFont('./fonts/Arial-bold.ttf', { family: 'Arial Bold' });
+  console.log('Fonte Arial Bold registrada com sucesso');
+} catch (error) {
+  console.error('Erro ao registrar fonte Arial Bold:', error);
+  console.log('Usando fonte padrão do sistema como fallback');
+}
 
 // Configuração do PostgreSQL
 const pgClient = new PgClient({
