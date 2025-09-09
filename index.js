@@ -53,6 +53,7 @@ const cron = require('node-cron');
 const request = require('request');
 const express = require('express');
 const { createBannerCropSession, handleBannerCropButton } = require('./utils/bannerCrop');
+const { createCanvas, loadImage } = require('canvas');
 require('dotenv').config();
 
 // Configuração do PostgreSQL
