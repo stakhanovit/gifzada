@@ -11699,46 +11699,77 @@ async function processFile(attachment, type, extraData = null) {
         .raw()
         .toBuffer({ resolveWithObject: true });
 
-      // Extrair múltiplas cores da imagem
+      // Extrair múltiplas cores da imagem com algoritmo melhorado
       const imageData = resizedBuffer.data;
       const { width, height } = resizedBuffer.info;
       const pixelCount = width * height;
       const colorCounts = new Map();
 
-      // Analisar pixels em intervalos para obter cores variadas
-      const sampleRate = Math.max(1, Math.floor(pixelCount / 1000)); // Máximo 1000 amostras
-
-      for (let i = 0; i < pixelCount; i += sampleRate) {
+      // Analisar todos os pixels mas agrupar cores similares de forma mais inteligente
+      for (let i = 0; i < pixelCount; i++) {
         const pixelIndex = i * 3; // 3 bytes por pixel (RGB)
         if (pixelIndex + 2 < imageData.length) {
           const r = imageData[pixelIndex];
           const g = imageData[pixelIndex + 1];
           const b = imageData[pixelIndex + 2];
 
-          // Agrupar cores similares (arredondar para reduzir variações)
-          const roundedR = Math.round(r / 10) * 10;
-          const roundedG = Math.round(g / 10) * 10;
-          const roundedB = Math.round(b / 10) * 10;
+          // Agrupar cores similares com tolerância de 20 (mais preciso)
+          const roundedR = Math.round(r / 20) * 20;
+          const roundedG = Math.round(g / 20) * 20;
+          const roundedB = Math.round(b / 20) * 20;
 
           const colorKey = `${roundedR},${roundedG},${roundedB}`;
           colorCounts.set(colorKey, (colorCounts.get(colorKey) || 0) + 1);
         }
       }
 
-      // Obter as 5 cores mais comuns
-      const sortedColors = Array.from(colorCounts.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([colorKey]) => {
+      // Filtrar cores muito escuras ou muito claras para obter cores mais vibrantes
+      const filteredColors = Array.from(colorCounts.entries())
+        .map(([colorKey, count]) => {
           const [r, g, b] = colorKey.split(',').map(Number);
-          return { r, g, b };
-        });
+          const brightness = (r + g + b) / 3;
+          const saturation = Math.max(r, g, b) - Math.min(r, g, b);
+          return { r, g, b, count, brightness, saturation };
+        })
+        .filter(color => color.brightness > 30 && color.brightness < 225) // Filtrar muito escuro/claro
+        .sort((a, b) => b.count - a.count); // Ordenar por frequência
 
-      // Adicionar a cor dominante do sharp no início
-      const colors = [
-        { r: dominant.r, g: dominant.g, b: dominant.b },
-        ...sortedColors.slice(0, 4) // Adicionar 4 cores mais comuns
-      ];
+      // Obter cores mais representativas
+      const representativeColors = [];
+      
+      // Adicionar a cor dominante do Sharp primeiro
+      representativeColors.push({ r: dominant.r, g: dominant.g, b: dominant.b });
+      
+      // Adicionar cores mais comuns, evitando cores muito similares
+      for (const color of filteredColors) {
+        if (representativeColors.length >= 5) break;
+        
+        // Verificar se a cor é suficientemente diferente das já adicionadas
+        const isDifferent = representativeColors.every(existing => {
+          const diff = Math.abs(existing.r - color.r) + Math.abs(existing.g - color.g) + Math.abs(existing.b - color.b);
+          return diff > 50; // Diferença mínima de 50 pontos RGB
+        });
+        
+        if (isDifferent) {
+          representativeColors.push({ r: color.r, g: color.g, b: color.b });
+        }
+      }
+
+      // Garantir que temos pelo menos 3 cores
+      while (representativeColors.length < 3 && filteredColors.length > 0) {
+        const nextColor = filteredColors.find(color => 
+          !representativeColors.some(existing => 
+            existing.r === color.r && existing.g === color.g && existing.b === color.b
+          )
+        );
+        if (nextColor) {
+          representativeColors.push({ r: nextColor.r, g: nextColor.g, b: nextColor.b });
+        } else {
+          break;
+        }
+      }
+
+      const colors = representativeColors;
 
       // Converter RGB para HEX e HSL
       const colorInfo = colors.map(color => {
@@ -11773,30 +11804,34 @@ async function processFile(attachment, type, extraData = null) {
         };
       });
 
-      // Criar uma paleta visual com as cores extraídas
+      // Criar uma paleta visual com as cores extraídas usando Canvas
       const paletteWidth = 500;
       const paletteHeight = 100;
       const colorWidth = paletteWidth / colors.length;
 
-      // Criar SVG da paleta
-      let svgContent = `<svg width="${paletteWidth}" height="${paletteHeight}" xmlns="http://www.w3.org/2000/svg">`;
+      // Criar canvas para a paleta
+      const paletteCanvas = createCanvas(paletteWidth, paletteHeight);
+      const paletteCtx = paletteCanvas.getContext('2d');
 
       colors.forEach((color, index) => {
         const x = index * colorWidth;
         const hex = colorInfo[index].hex;
-        svgContent += `<rect x="${x}" y="0" width="${colorWidth}" height="${paletteHeight}" fill="${hex}"/>`;
+        
+        // Desenhar retângulo da cor
+        paletteCtx.fillStyle = hex;
+        paletteCtx.fillRect(x, 0, colorWidth, paletteHeight);
 
         // Adicionar texto com o valor HEX
         const textColor = (color.r + color.g + color.b) > 384 ? '#000000' : '#ffffff';
-        svgContent += `<text x="${x + colorWidth/2}" y="${paletteHeight/2 + 5}" text-anchor="middle" fill="${textColor}" font-family="Arial Bold" font-size="12">${hex}</text>`;
+        paletteCtx.fillStyle = textColor;
+        paletteCtx.font = '12px "Arial Bold"';
+        paletteCtx.textAlign = 'center';
+        paletteCtx.textBaseline = 'middle';
+        paletteCtx.fillText(hex, x + colorWidth/2, paletteHeight/2 + 2);
       });
 
-      svgContent += '</svg>';
-
-      // Converter SVG para PNG
-      const paletteBuffer = await sharp(Buffer.from(svgContent))
-        .png()
-        .toBuffer();
+      // Converter canvas para buffer PNG
+      const paletteBuffer = paletteCanvas.toBuffer('image/png');
 
       // Criar arquivo de texto com as informações das cores
       let colorData = `CORES EXTRAÍDAS DA IMAGEM:\n\n`;
