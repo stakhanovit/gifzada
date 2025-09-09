@@ -7,6 +7,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
+const { createCanvas, loadImage } = require('canvas');
 
 // Store active banner crop sessions
 const bannerCropSessions = new Map();
@@ -206,76 +207,101 @@ Sua imagem foi automaticamente redimensionada para permitir a criação do banne
     }
 }
 
-// Generate banner preview using Sharp (PNG preview for all formats)
+// Generate banner preview using Canvas with proper font rendering
 async function generateBannerPreview(session) {
     try {
-        // Always use Sharp for preview (PNG) - fast and consistent
-        // Final crop will preserve GIF animation separately
+        // Convert image buffer to PNG for Canvas compatibility
         let image = sharp(session.imageBuffer);
-        
-        // Get image metadata to ensure we have dimensions
         const metadata = await image.metadata();
         const { width, height } = metadata;
         
-        // Create an overlay with red border for the crop area (affected by zoom)  
-        // LÓGICA CORRIGIDA: zoom maior = área maior na imagem original
+        // Convert to PNG buffer for Canvas
+        const pngBuffer = await image.png().toBuffer();
+        
+        // Load image into Canvas
+        const baseImage = await loadImage(pngBuffer);
+        
+        // Create canvas with the original image size
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+        
+        // Draw the base image
+        ctx.drawImage(baseImage, 0, 0);
+        
+        // Calculate overlay dimensions (affected by zoom)
         const overlayWidth = Math.round(BANNER_WIDTH * session.zoomScale);
         const overlayHeight = Math.round(BANNER_HEIGHT * session.zoomScale);
         
-        // Create a red border overlay
-        const redBorderSvg = `
-            <svg width="${overlayWidth}" height="${overlayHeight}">
-                <rect x="0" y="0" width="${overlayWidth}" height="${overlayHeight}" 
-                      fill="rgba(255,0,0,0.3)" stroke="red" stroke-width="4"/>
-                <text x="${overlayWidth/2}" y="${overlayHeight/2}" 
-                      text-anchor="middle" dominant-baseline="middle" 
-                      fill="white" stroke="black" stroke-width="1" 
-                      font-size="${Math.max(12, 20 * session.zoomScale)}" font-family="Arial Bold" font-weight="bold">
-                      Banner ${BANNER_WIDTH}x${BANNER_HEIGHT}
-                </text>
-                <text x="10" y="${Math.max(15, 25 * session.zoomScale)}" 
-                      fill="white" stroke="black" stroke-width="1" 
-                      font-size="${Math.max(10, 16 * session.zoomScale)}" font-family="Arial Bold" font-weight="bold">
-                      Área: ${overlayWidth}x${overlayHeight}px | Zoom: ${(session.zoomScale * 100).toFixed(0)}%
-                </text>
-            </svg>
-        `;
+        // Draw red border overlay for crop area
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(session.cropX, session.cropY, overlayWidth, overlayHeight);
         
-        // Create overlay buffer
-        const overlayBuffer = Buffer.from(redBorderSvg);
+        // Draw semi-transparent overlay
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        ctx.fillRect(session.cropX, session.cropY, overlayWidth, overlayHeight);
         
-        // Composite the overlay onto the original image
-        const result = await image
-            .composite([{
-                input: overlayBuffer,
-                top: session.cropY,
-                left: session.cropX
-            }])
-            .png()
-            .toBuffer();
-            
-        return result;
+        // Draw text with proper font
+        const fontSize = Math.max(12, 20 * session.zoomScale);
+        const smallFontSize = Math.max(10, 16 * session.zoomScale);
+        
+        // Main banner text
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 1;
+        ctx.font = `bold ${fontSize}px "Arial Bold"`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        const centerX = session.cropX + overlayWidth / 2;
+        const centerY = session.cropY + overlayHeight / 2;
+        
+        ctx.strokeText(`Banner ${BANNER_WIDTH}x${BANNER_HEIGHT}`, centerX, centerY);
+        ctx.fillText(`Banner ${BANNER_WIDTH}x${BANNER_HEIGHT}`, centerX, centerY);
+        
+        // Info text
+        ctx.font = `bold ${smallFontSize}px "Arial Bold"`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        const infoX = session.cropX + 10;
+        const infoY = session.cropY + Math.max(15, 25 * session.zoomScale);
+        const infoText = `Área: ${overlayWidth}x${overlayHeight}px | Zoom: ${(session.zoomScale * 100).toFixed(0)}%`;
+        
+        ctx.strokeText(infoText, infoX, infoY);
+        ctx.fillText(infoText, infoX, infoY);
+        
+        // Convert canvas to PNG buffer
+        return canvas.toBuffer('image/png');
+        
     } catch (error) {
         console.error('Error generating preview:', error);
-        // Fallback: return a simple text-based preview
-        const simpleSvg = `
-            <svg width="400" height="200">
-                <rect width="400" height="200" fill="white" stroke="black" stroke-width="2"/>
-                <text x="200" y="70" text-anchor="middle" font-size="18" font-family="Arial Bold">
-                    Banner Crop Preview
-                </text>
-                <text x="200" y="100" text-anchor="middle" font-size="14" font-family="Arial Bold">
-                    Image: ${session.originalWidth}x${session.originalHeight}px
-                </text>
-                <text x="200" y="125" text-anchor="middle" font-size="14" font-family="Arial Bold">
-                    Banner: ${BANNER_WIDTH}x${BANNER_HEIGHT}px
-                </text>
-                <text x="200" y="150" text-anchor="middle" font-size="14" font-family="Arial Bold">
-                    Position: X:${session.cropX} Y:${session.cropY}
-                </text>
-            </svg>
-        `;
-        return Buffer.from(simpleSvg);
+        
+        // Fallback: create a simple preview using Canvas
+        const fallbackCanvas = createCanvas(400, 200);
+        const fallbackCtx = fallbackCanvas.getContext('2d');
+        
+        // White background with black border
+        fallbackCtx.fillStyle = 'white';
+        fallbackCtx.fillRect(0, 0, 400, 200);
+        fallbackCtx.strokeStyle = 'black';
+        fallbackCtx.lineWidth = 2;
+        fallbackCtx.strokeRect(0, 0, 400, 200);
+        
+        // Text with proper font
+        fallbackCtx.fillStyle = 'black';
+        fallbackCtx.textAlign = 'center';
+        fallbackCtx.textBaseline = 'middle';
+        
+        fallbackCtx.font = '18px "Arial Bold"';
+        fallbackCtx.fillText('Banner Crop Preview', 200, 70);
+        
+        fallbackCtx.font = '14px "Arial Bold"';
+        fallbackCtx.fillText(`Image: ${session.originalWidth}x${session.originalHeight}px`, 200, 100);
+        fallbackCtx.fillText(`Banner: ${BANNER_WIDTH}x${BANNER_HEIGHT}px`, 200, 125);
+        fallbackCtx.fillText(`Position: X:${session.cropX} Y:${session.cropY}`, 200, 150);
+        
+        return fallbackCanvas.toBuffer('image/png');
     }
 }
 
