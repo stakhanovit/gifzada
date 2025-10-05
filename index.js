@@ -1,4 +1,4 @@
-// Fix for Railway Node.js 18 - comprehensive polyfills for undici
+// Fix for Railway Node.js 18 - comprehensive polyfills for undic
 if (typeof globalThis.File === 'undefined') {
   const { Blob } = require('buffer');
   
