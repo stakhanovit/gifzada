@@ -1,7 +1,7 @@
 // Fix for Railway Node.js 18 - comprehensive polyfills for undic
 if (typeof globalThis.File === 'undefined') {
   const { Blob } = require('buffer');
-  
+
   // File polyfill
   globalThis.File = class File extends Blob {
     constructor(chunks, fileName, options = {}) {
@@ -11,12 +11,12 @@ if (typeof globalThis.File === 'undefined') {
       this.webkitRelativePath = '';
     }
   };
-  
+
   // FormData polyfill if needed
   if (typeof globalThis.FormData === 'undefined') {
     globalThis.FormData = require('form-data');
   }
-  
+
   // Request/Response polyfills if needed
   if (typeof globalThis.Request === 'undefined') {
     const { Request, Response } = require('undici');
@@ -54,6 +54,7 @@ const request = require('request');
 const express = require('express');
 const { createBannerCropSession, handleBannerCropButton } = require('./utils/bannerCrop');
 const { createCanvas, loadImage, registerFont } = require('canvas');
+const Tesseract = require('tesseract.js');
 require('dotenv').config();
 
 // Registrar fonte personalizada para uso no Canvas
@@ -66,21 +67,37 @@ try {
 }
 
 // Configuração do PostgreSQL
+if (!process.env.DATABASE_URL) {
+  console.error('❌ DATABASE_URL não encontrado nos Secrets!');
+  console.error('Por favor, adicione DATABASE_URL nos Secrets do Replit');
+  process.exit(1);
+}
+
+console.log('🔍 Verificando DATABASE_URL...');
+console.log('✅ DATABASE_URL encontrado nos Secrets');
+
 const pgClient = new PgClient({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Necessário para alguns provedores de PostgreSQL
+  }
 });
 
 // Conectar ao PostgreSQL
 pgClient.connect().then(() => {
-  console.log('Conectado ao PostgreSQL');
+  console.log('✅ Conectado ao PostgreSQL com sucesso!');
+  console.log('📊 Inicializando tabelas do banco de dados...');
   initializeDatabase();
 }).catch(err => {
-  console.error('Erro ao conectar ao PostgreSQL:', err);
+  console.error('❌ Erro ao conectar ao PostgreSQL:', err);
+  console.error('Verifique se o DATABASE_URL está correto nos Secrets');
+  process.exit(1);
 });
 
 // Função para inicializar tabelas do banco
 async function initializeDatabase() {
   try {
+    console.log('🔨 Criando tabela: active_threads');
     // Criar tabela de threads ativas
     await pgClient.query(`
       CREATE TABLE IF NOT EXISTS active_threads (
@@ -91,6 +108,7 @@ async function initializeDatabase() {
       )
     `);
 
+    console.log('🔨 Criando tabela: recruitment_blacklist');
     // Criar tabela de blacklist de recrutamento
     await pgClient.query(`
       CREATE TABLE IF NOT EXISTS recruitment_blacklist (
@@ -259,9 +277,315 @@ async function initializeDatabase() {
       )
     `);
 
-    console.log('Tabelas do banco de dados inicializadas');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS moderation_actions (
+        id SERIAL PRIMARY KEY,
+        action_type VARCHAR(20) NOT NULL,
+        target_user_id VARCHAR(20) NOT NULL,
+        moderator_id VARCHAR(20) NOT NULL,
+        reason TEXT,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        via_command BOOLEAN DEFAULT TRUE
+      )
+    `);
+
+    // Criar tabela de palavras-chave bloqueadas para OCR
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS ocr_blocked_keywords (
+        id SERIAL PRIMARY KEY,
+        keyword VARCHAR(100) NOT NULL UNIQUE,
+        added_by VARCHAR(20) NOT NULL,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Inserir palavras-chave padrão se não existirem
+    const defaultKeywords = ['Giveaway', 'Mrbeast', 'Withdraw'];
+    for (const keyword of defaultKeywords) {
+      await pgClient.query(`
+        INSERT INTO ocr_blocked_keywords (keyword, added_by) 
+        VALUES ($1, 'system') 
+        ON CONFLICT (keyword) DO NOTHING
+      `, [keyword.toLowerCase()]);
+    }
+
+    // Criar tabela de palavras-chave suspeitas (sistema anti-spam)
+    console.log('🔨 Criando tabela: suspicious_keywords');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS suspicious_keywords (
+        id SERIAL PRIMARY KEY,
+        keyword VARCHAR(100) NOT NULL UNIQUE,
+        added_by VARCHAR(20) NOT NULL,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Inserir palavras-chave suspeitas padrão se não existirem
+    const defaultSuspiciousKeywords = ['brainrot', 'muito', 'barato', 'brinde', 'compre', 'leve', 'outro', 'vendendo', 'jogo', 'disponível', 'pv'];
+    for (const keyword of defaultSuspiciousKeywords) {
+      await pgClient.query(`
+        INSERT INTO suspicious_keywords (keyword, added_by) 
+        VALUES ($1, 'system') 
+        ON CONFLICT (keyword) DO NOTHING
+      `, [keyword.toLowerCase()]);
+    }
+
+    // Criar tabela de economia de Halloween (doces e XP)
+    console.log('🔨 Criando tabela: halloween_economy');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS halloween_economy (
+        user_id VARCHAR(20) PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        doces INTEGER DEFAULT 0,
+        xp INTEGER DEFAULT 0,
+        nivel INTEGER DEFAULT 1,
+        last_daily TIMESTAMP,
+        last_xp_message TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar tabela de tickets de suporte
+    console.log('🔨 Criando tabela: support_tickets');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id SERIAL PRIMARY KEY,
+        ticket_id VARCHAR(50) NOT NULL UNIQUE,
+        thread_id VARCHAR(20) NOT NULL,
+        user_id VARCHAR(20) NOT NULL,
+        staff_id VARCHAR(20),
+        status VARCHAR(50) DEFAULT 'aberto',
+        title VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        closed_at TIMESTAMP,
+        resolved_by VARCHAR(20)
+      )
+    `);
+
+    // Criar tabela de escalas da equipe de suporte
+    console.log('🔨 Criando tabela: support_schedule');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS support_schedule (
+        id SERIAL PRIMARY KEY,
+        staff_id VARCHAR(20) NOT NULL,
+        staff_name VARCHAR(100) NOT NULL,
+        day_of_week INTEGER NOT NULL,
+        start_time TIME NOT NULL,
+        end_time TIME NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar tabela de eventos de entretenimento
+    console.log('🔨 Criando tabela: entertainment_events');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS entertainment_events (
+        id SERIAL PRIMARY KEY,
+        event_id VARCHAR(50) NOT NULL UNIQUE,
+        title VARCHAR(200) NOT NULL,
+        event_date TIMESTAMP NOT NULL,
+        responsible_id VARCHAR(20) NOT NULL,
+        responsible_name VARCHAR(100) NOT NULL,
+        description TEXT,
+        status VARCHAR(50) DEFAULT 'agendado',
+        participants_count INTEGER DEFAULT 0,
+        created_by VARCHAR(20) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+      )
+    `);
+
+    // Criar tabela de enquetes
+    console.log('🔨 Criando tabela: entertainment_polls');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS entertainment_polls (
+        id SERIAL PRIMARY KEY,
+        poll_id VARCHAR(50) NOT NULL UNIQUE,
+        message_id VARCHAR(20),
+        question TEXT NOT NULL,
+        options JSONB NOT NULL,
+        created_by VARCHAR(20) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP,
+        is_active BOOLEAN DEFAULT TRUE
+      )
+    `);
+
+    // Criar tabela de votos nas enquetes
+    console.log('🔨 Criando tabela: poll_votes');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS poll_votes (
+        id SERIAL PRIMARY KEY,
+        poll_id VARCHAR(50) NOT NULL,
+        user_id VARCHAR(20) NOT NULL,
+        option_index INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(poll_id, user_id)
+      )
+    `);
+
+    // Criar tabela de equipe de entretenimento
+    console.log('🔨 Criando tabela: entertainment_team');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS entertainment_team (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(20) NOT NULL UNIQUE,
+        username VARCHAR(100) NOT NULL,
+        status VARCHAR(50) DEFAULT 'ativo',
+        events_organized INTEGER DEFAULT 0,
+        last_active TIMESTAMP,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Criar tabela de ideias de eventos
+    console.log('🔨 Criando tabela: event_ideas');
+    await pgClient.query(`
+      CREATE TABLE IF NOT EXISTS event_ideas (
+        id SERIAL PRIMARY KEY,
+        idea_id VARCHAR(50) NOT NULL UNIQUE,
+        title VARCHAR(200) NOT NULL,
+        description TEXT,
+        suggested_by VARCHAR(20) NOT NULL,
+        suggested_by_name VARCHAR(100) NOT NULL,
+        upvotes INTEGER DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'pendente',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    console.log('✅ Todas as tabelas do banco de dados foram inicializadas com sucesso!');
+    console.log('📊 Total de tabelas criadas/verificadas: 21');
   } catch (error) {
-    console.error('Erro ao inicializar banco de dados:', error);
+    console.error('❌ Erro ao inicializar banco de dados:', error);
+    console.error('Stack trace:', error.stack);
+    process.exit(1);
+  }
+}
+
+// Funções do sistema de economia de Halloween
+
+// Calcular XP necessário para cada nível
+function getXPForLevel(level) {
+  if (level === 1) return 50;
+  if (level === 2) return 85;
+  if (level === 3) return 110;
+
+  const baseXP = 110;
+  const increment = 35;
+  return baseXP + (increment * (level - 3));
+}
+
+// Obter ou criar usuário na economia
+async function getOrCreateEconomyUser(userId, username) {
+  try {
+    let result = await pgClient.query(
+      'SELECT * FROM halloween_economy WHERE user_id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      await pgClient.query(
+        'INSERT INTO halloween_economy (user_id, username) VALUES ($1, $2)',
+        [userId, username]
+      );
+      result = await pgClient.query(
+        'SELECT * FROM halloween_economy WHERE user_id = $1',
+        [userId]
+      );
+    }
+
+    return result.rows[0];
+  } catch (error) {
+    console.error('Erro ao obter/criar usuário na economia:', error);
+    return null;
+  }
+}
+
+// Adicionar doces ao usuário
+async function addDoces(userId, username, amount) {
+  try {
+    await getOrCreateEconomyUser(userId, username);
+    await pgClient.query(
+      'UPDATE halloween_economy SET doces = doces + $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2',
+      [amount, userId]
+    );
+    return true;
+  } catch (error) {
+    console.error('Erro ao adicionar doces:', error);
+    return false;
+  }
+}
+
+// Adicionar XP e verificar level up
+async function addXP(userId, username, xpAmount, isBooster = false) {
+  try {
+    const user = await getOrCreateEconomyUser(userId, username);
+    if (!user) return null;
+
+    const xpToAdd = isBooster ? xpAmount * 2 : xpAmount;
+    const newXP = user.xp + xpToAdd;
+    let newLevel = user.nivel;
+    let remainingXP = newXP;
+
+    while (remainingXP >= getXPForLevel(newLevel)) {
+      remainingXP -= getXPForLevel(newLevel);
+      newLevel++;
+    }
+
+    await pgClient.query(
+      'UPDATE halloween_economy SET xp = $1, nivel = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3',
+      [remainingXP, newLevel, userId]
+    );
+
+    return {
+      leveledUp: newLevel > user.nivel,
+      oldLevel: user.nivel,
+      newLevel: newLevel,
+      xpGained: xpToAdd
+    };
+  } catch (error) {
+    console.error('Erro ao adicionar XP:', error);
+    return null;
+  }
+}
+
+// Verificar se usuário pode usar daily
+async function canUseDaily(userId) {
+  try {
+    const result = await pgClient.query(
+      'SELECT last_daily FROM halloween_economy WHERE user_id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].last_daily) {
+      return true;
+    }
+
+    const lastDaily = new Date(result.rows[0].last_daily);
+    const now = new Date();
+    const diffHours = (now - lastDaily) / (1000 * 60 * 60);
+
+    return diffHours >= 24;
+  } catch (error) {
+    console.error('Erro ao verificar daily:', error);
+    return false;
+  }
+}
+
+// Atualizar timestamp do daily
+async function updateDailyTimestamp(userId) {
+  try {
+    await pgClient.query(
+      'UPDATE halloween_economy SET last_daily = CURRENT_TIMESTAMP WHERE user_id = $1',
+      [userId]
+    );
+    return true;
+  } catch (error) {
+    console.error('Erro ao atualizar daily:', error);
+    return false;
   }
 }
 
@@ -282,7 +606,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   rest: {
@@ -730,6 +1055,184 @@ async function countTwitterLikes(postId) {
   } catch (error) {
     console.error('Erro ao contar curtidas Twitter:', error);
     return 0;
+  }
+}
+
+async function registerModerationAction(actionType, targetUserId, moderatorId, reason = null, viaCommand = true) {
+  try {
+    await pgClient.query(`
+      INSERT INTO moderation_actions (action_type, target_user_id, moderator_id, reason, via_command)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [actionType, targetUserId, moderatorId, reason, viaCommand]);
+    console.log(`Ação de moderação registrada: ${actionType} em ${targetUserId} por ${moderatorId}`);
+  } catch (error) {
+    console.error('Erro ao registrar ação de moderação:', error);
+  }
+}
+
+async function checkRecentModerationCommand(actionType, targetUserId, timeWindowSeconds = 10) {
+  try {
+    const result = await pgClient.query(`
+      SELECT * FROM moderation_actions 
+      WHERE action_type = $1 
+        AND target_user_id = $2 
+        AND via_command = true 
+        AND executed_at > NOW() - INTERVAL '${timeWindowSeconds} seconds'
+      ORDER BY executed_at DESC 
+      LIMIT 1
+    `, [actionType, targetUserId]);
+
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } catch (error) {
+    console.error('Erro ao verificar comando de moderação recente:', error);
+    return null;
+  }
+}
+
+// Funções para gerenciar palavras-chave bloqueadas
+async function getBlockedKeywords() {
+  try {
+    const result = await pgClient.query('SELECT keyword FROM ocr_blocked_keywords ORDER BY keyword ASC');
+    return result.rows.map(row => row.keyword);
+  } catch (error) {
+    console.error('Erro ao buscar palavras-chave bloqueadas:', error);
+    return [];
+  }
+}
+
+async function addBlockedKeyword(keyword, addedBy) {
+  try {
+    await pgClient.query(
+      'INSERT INTO ocr_blocked_keywords (keyword, added_by) VALUES ($1, $2) ON CONFLICT (keyword) DO NOTHING',
+      [keyword.toLowerCase(), addedBy]
+    );
+    return true;
+  } catch (error) {
+    console.error('Erro ao adicionar palavra-chave bloqueada:', error);
+    return false;
+  }
+}
+
+async function removeBlockedKeyword(keyword) {
+  try {
+    const result = await pgClient.query(
+      'DELETE FROM ocr_blocked_keywords WHERE keyword = $1',
+      [keyword.toLowerCase()]
+    );
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error('Erro ao remover palavra-chave bloqueada:', error);
+    return false;
+  }
+}
+
+// Funções para gerenciar palavras-chave suspeitas (sistema anti-spam)
+async function getSuspiciousKeywords() {
+  try {
+    const result = await pgClient.query('SELECT keyword FROM suspicious_keywords ORDER BY keyword ASC');
+    return result.rows.map(row => row.keyword);
+  } catch (error) {
+    console.error('Erro ao buscar palavras-chave suspeitas:', error);
+    return [];
+  }
+}
+
+async function addSuspiciousKeyword(keyword, addedBy) {
+  try {
+    await pgClient.query(
+      'INSERT INTO suspicious_keywords (keyword, added_by) VALUES ($1, $2) ON CONFLICT (keyword) DO NOTHING',
+      [keyword.toLowerCase(), addedBy]
+    );
+    return true;
+  } catch (error) {
+    console.error('Erro ao adicionar palavra-chave suspeita:', error);
+    return false;
+  }
+}
+
+async function removeSuspiciousKeyword(keyword) {
+  try {
+    const result = await pgClient.query(
+      'DELETE FROM suspicious_keywords WHERE keyword = $1',
+      [keyword.toLowerCase()]
+    );
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error('Erro ao remover palavra-chave suspeita:', error);
+    return false;
+  }
+}
+
+async function clearSuspiciousKeywords() {
+  try {
+    const result = await pgClient.query('DELETE FROM suspicious_keywords');
+    return result.rowCount;
+  } catch (error) {
+    console.error('Erro ao limpar palavras-chave suspeitas:', error);
+    return 0;
+  }
+}
+
+// Função para decodificar HTML entities
+function decodeHtmlEntities(text) {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'");
+}
+
+// Função para extrair URLs de imagens do texto
+function extractImageUrls(text) {
+  const decodedText = decodeHtmlEntities(text);
+
+  const imageUrlRegex = /https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp)(?:\?[^\s]*)?/gi;
+  const discordCdnRegex = /https?:\/\/(?:cdn\.discordapp\.com|media\.discordapp\.net)\/attachments\/[^\s]+/gi;
+
+  const urls = [];
+  const matches1 = decodedText.match(imageUrlRegex);
+  const matches2 = decodedText.match(discordCdnRegex);
+
+  if (matches1) urls.push(...matches1);
+  if (matches2) urls.push(...matches2);
+
+  return [...new Set(urls)];
+}
+
+// Função para analisar imagem com OCR
+async function analyzeImageWithOCR(imageUrl) {
+  const tempFile = `./temp_ocr_${Date.now()}.png`;
+  try {
+    console.log(`Analisando imagem com OCR: ${imageUrl}`);
+
+    const response = await fetch(imageUrl);
+
+    if (!response.ok) {
+      throw new Error(`Falha ao baixar imagem: ${response.status} ${response.statusText}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const imageBuffer = Buffer.from(arrayBuffer);
+
+    await sharp(imageBuffer)
+      .png()
+      .toFile(tempFile);
+
+    const { data: { text } } = await Tesseract.recognize(tempFile, 'eng', {
+      logger: m => console.log(`OCR Progress: ${m.status} ${m.progress ? (m.progress * 100).toFixed(0) + '%' : ''}`)
+    });
+
+    fs.unlinkSync(tempFile);
+
+    console.log(`Texto detectado no OCR: ${text}`);
+    return text;
+  } catch (error) {
+    console.error('Erro ao analisar imagem com OCR:', error);
+    if (fs.existsSync(tempFile)) {
+      fs.unlinkSync(tempFile);
+    }
+    return '';
   }
 }
 
@@ -1275,20 +1778,20 @@ async function handleConversorFeedbackTimeout(threadId) {
     // Encontrar o usuário através do nome da thread
     const threadName = channel.name;
     const usernameMatch = threadName.match(/🎞️ \| Conversão - (.+)/);
-    
+
     if (usernameMatch) {
       const username = usernameMatch[1];
       // Buscar o usuário através de mensagens da thread
       const messages = await channel.messages.fetch({ limit: 10 });
       const userMessage = messages.find(msg => msg.author.username === username);
-      
+
       if (userMessage) {
         // Atualizar estatísticas (não deu feedback)
         await updateConverterStats(userMessage.author.id, userMessage.author.username, false, false);
-        
+
         // Verificar se deve aplicar advertência
         const warningResult = await checkAndIssueWarning(userMessage.author.id, userMessage.author.username);
-        
+
         if (warningResult && warningResult.warned) {
           const warningEmbed = new EmbedBuilder()
             .setTitle('⚠️ **ADVERTÊNCIA APLICADA**')
@@ -1356,7 +1859,7 @@ async function registrarFeedbackConversor(threadId, userId, rating, feedbackText
 
     // Verificar se deve aplicar advertência
     const warningResult = await checkAndIssueWarning(userId, user.username);
-    
+
     // Enviar feedback no canal específico
     const feedbackChannelId = '1405236674052751512';
     const feedbackChannel = client.channels.cache.get(feedbackChannelId);
@@ -1411,14 +1914,14 @@ async function verificarCargoFeedbackPositivo(userId) {
       if (guild) {
         const member = await guild.members.fetch(userId).catch(() => null);
         const cargoId = '1399533593360990421';
-        
+
         if (member && !member.roles.cache.has(cargoId)) {
           await member.roles.add(cargoId);
-          
+
           // Enviar notificação no canal de feedback
           const feedbackChannelId = '1405236674052751512';
           const feedbackChannel = client.channels.cache.get(feedbackChannelId);
-          
+
           if (feedbackChannel) {
             const cargoEmbed = new EmbedBuilder()
               .setTitle('**CARGO CONCEDIDO!**')
@@ -1437,7 +1940,7 @@ async function verificarCargoFeedbackPositivo(userId) {
 
             await feedbackChannel.send({ embeds: [cargoEmbed] });
           }
-          
+
           console.log(`Cargo especial concedido para ${member.user.username} por ${feedbacksPositivos} feedbacks positivos`);
         }
       }
@@ -1692,6 +2195,10 @@ client.once('ready', async () => {
         },
       ],
     },
+    {
+      name: 'painel',
+      description: 'Abre o painel administrativo (Suporte ou Entretenimento)',
+    },
   ];
 
   try {
@@ -1772,6 +2279,29 @@ client.once('ready', async () => {
           return;
         }
 
+        // ANTES DE ABRIR: Buscar e deletar mensagens "Aberto" ou "Fechado" do cargo específico
+        try {
+          const targetRoleId = '1094385139976507523';
+          const messages = await channel.messages.fetch({ limit: 50 });
+
+          for (const [messageId, message] of messages) {
+            // Verificar se o autor tem o cargo específico
+            if (message.member && message.member.roles.cache.has(targetRoleId)) {
+              const content = message.content.toLowerCase().trim();
+
+              // Verificar se a mensagem contém exatamente "aberto" ou "fechado"
+              if (content.includes('aberto') || content.includes('fechado')) {
+                await message.delete().catch(err => 
+                  console.error(`Erro ao deletar mensagem ${messageId}:`, err)
+                );
+                console.log(`Mensagem "${message.content}" de ${message.author.tag} deletada antes de abrir o canal`);
+              }
+            }
+          }
+        } catch (fetchError) {
+          console.error(`Erro ao buscar mensagens antes de abrir canal ${channel.name}:`, fetchError);
+        }
+
         // Desbloquear o canal com permissões explícitas
         await channel.permissionOverwrites.edit(channel.guild.roles.everyone, {
           SendMessages: true,
@@ -1795,6 +2325,29 @@ client.once('ready', async () => {
         if (isAlreadyLocked) {
           console.log(`Canal ${channel.name} já está bloqueado`);
           return;
+        }
+
+        // ANTES DE FECHAR: Buscar e deletar mensagens "Aberto" ou "Fechado" do cargo específico
+        try {
+          const targetRoleId = '1094385139976507523';
+          const messages = await channel.messages.fetch({ limit: 50 });
+
+          for (const [messageId, message] of messages) {
+            // Verificar se o autor tem o cargo específico
+            if (message.member && message.member.roles.cache.has(targetRoleId)) {
+              const content = message.content.toLowerCase().trim();
+
+              // Verificar se a mensagem contém exatamente "aberto" ou "fechado"
+              if (content.includes('aberto') || content.includes('fechado')) {
+                await message.delete().catch(err => 
+                  console.error(`Erro ao deletar mensagem ${messageId}:`, err)
+                );
+                console.log(`Mensagem "${message.content}" de ${message.author.tag} deletada antes de fechar o canal`);
+              }
+            }
+          }
+        } catch (fetchError) {
+          console.error(`Erro ao buscar mensagens antes de fechar canal ${channel.name}:`, fetchError);
         }
 
         // Bloquear o canal
@@ -2024,6 +2577,28 @@ async function finalizarTicket(interaction, assignment, channel = null) {
     threadAssignments.delete(threadId);
     feedbackGiven.delete(threadId);
 
+    // Atualizar status do ticket no banco de dados
+    try {
+      const updateResult = await pgClient.query(`
+        UPDATE support_tickets 
+        SET status = 'resolvido', 
+            closed_at = CURRENT_TIMESTAMP,
+            resolved_by = $1
+        WHERE thread_id = $2
+        RETURNING *
+      `, [assignment.staffId, threadId]);
+
+      if (updateResult.rowCount > 0) {
+        console.log(`✅ Ticket ${threadId} marcado como resolvido no banco de dados`);
+        console.log(`   Status: ${updateResult.rows[0].status}`);
+        console.log(`   Closed at: ${updateResult.rows[0].closed_at}`);
+      } else {
+        console.log(`⚠️ Nenhum ticket encontrado com thread_id: ${threadId}`);
+      }
+    } catch (dbError) {
+      console.error('❌ Erro ao atualizar status do ticket:', dbError);
+    }
+
     // Se for ticket de maker, enviar para apadrinhamento
     if (assignment.threadType === 'maker') {
       try {
@@ -2059,7 +2634,7 @@ async function finalizarTicket(interaction, assignment, channel = null) {
 ${nome}
 **Idade:**
 ${idade}
-**Já foi maker de outro servidor de GIFS?**
+**Já foi staff de outro servidor de GIFS?**
 ${foiMaker}
 **Objetivo a alcançar:**
 ${objetivo}
@@ -2086,7 +2661,11 @@ ${objetivo}
       }
     }
 
-    // Arquivar thread
+    // Aguardar 5 segundos antes de trancar e arquivar
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Trancar e arquivar thread
+    await targetChannel.setLocked(true);
     await targetChannel.setArchived(true);
 
     // Remover thread ativa do banco
@@ -2395,36 +2974,629 @@ Esta foi a postagem que mais recebeu curtidas na última semana:
   }
 }
 
-// Sistema de boas-vindas com menção temporária
+// Sistema de boas-vindas com menção temporária (usuário + cargo)
 client.on('guildMemberAdd', async member => {
   try {
-    const welcomeChannelId = '1413234213876142140';
+    // Ignorar se for o servidor de maker (1182331070750933073)
+    if (member.guild.id === '1182331070750933073') {
+      console.log(`Entrada ignorada no servidor maker: ${member.user.tag}`);
+      return;
+    }
+
+    // Apenas processar se for o servidor principal (953748240589787136)
+    if (member.guild.id !== '953748240589787136') {
+      console.log(`Entrada ignorada - servidor não monitorado: ${member.guild.id}`);
+      return;
+    }
+
+    const welcomeChannelId = '1428907573813313799';
+    const welcomeRoleId = '1399510808777592852';
     const welcomeChannel = client.channels.cache.get(welcomeChannelId);
-    
+
     if (!welcomeChannel) {
       console.log('Canal de boas-vindas não encontrado');
       return;
     }
 
-    // Enviar menção
-    const mentionMessage = await welcomeChannel.send(`${member}`);
-    
-    // Deletar a menção após 1 segundo
+    // Enviar menção do usuário E do cargo juntos
+    const mentionMessage = await welcomeChannel.send({
+      content: `${member}`,
+      allowedMentions: { 
+        users: [member.id],
+        roles: [welcomeRoleId]
+      }
+    });
+
+    // Deletar a menção após 20 segundos
     setTimeout(async () => {
       try {
         await mentionMessage.delete();
       } catch (error) {
         console.error('Erro ao deletar mensagem de boas-vindas:', error);
       }
-    }, 1000);
+    }, 20000);
 
-    console.log(`Membro ${member.user.tag} mencionado no canal de boas-vindas`);
+    console.log(`Membro ${member.user.tag} e cargo mencionados no canal ${welcomeChannelId}`);
   } catch (error) {
     console.error('Erro no sistema de boas-vindas:', error);
   }
 });
 
 client.on('messageCreate', async message => {
+  // Sistema de ganho de XP no canal específico
+  if (!message.author.bot && message.channel.id === '1316427226039718031') {
+    try {
+      const user = await getOrCreateEconomyUser(message.author.id, message.author.username);
+
+      if (user) {
+        const now = new Date();
+        const lastXpMessage = user.last_xp_message ? new Date(user.last_xp_message) : null;
+
+        const canGainXP = !lastXpMessage || (now - lastXpMessage) >= 60000;
+
+        if (canGainXP) {
+          const isBooster = message.member && message.member.roles.cache.has('886376407951876177');
+          const xpGained = Math.floor(Math.random() * 3) + 1;
+
+          const result = await addXP(message.author.id, message.author.username, xpGained, isBooster);
+
+          await pgClient.query(
+            'UPDATE halloween_economy SET last_xp_message = CURRENT_TIMESTAMP WHERE user_id = $1',
+            [message.author.id]
+          );
+
+          if (result && result.leveledUp) {
+            const levelUpEmbed = new EmbedBuilder()
+              .setTitle('🎃 LEVEL UP!')
+              .setDescription(`
+**${message.author.username}** subiu de nível!
+
+🎊 **Nível ${result.oldLevel}** → **Nível ${result.newLevel}**
+
+${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
+
+> Continue conversando para ganhar mais XP! Use \`!nivel\` para ver seu progresso.
+`)
+              .setColor('#FFD700')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setTimestamp();
+
+            await message.channel.send({ embeds: [levelUpEmbed] });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao processar XP:', error);
+    }
+  }
+
+  // Sistema de check e menção quando usuário do ticket responde APÓS TIMER
+  if (!message.author.bot && message.channel.isThread()) {
+    const threadId = message.channel.id;
+    const threadName = message.channel.name;
+
+    // Cancelar timer de ticket se usuário responder
+    if (global.ticketTimers && global.ticketTimers.has(threadId)) {
+      // Buscar o criador da thread através do nome
+      const userIdMatch = threadName.match(/(\d+)/);
+
+      // Verificar se é o dono do ticket respondendo
+      if (userIdMatch && userIdMatch[1] === message.author.id) {
+        // Cancelar timer
+        clearTimeout(global.ticketTimers.get(threadId));
+        global.ticketTimers.delete(threadId);
+
+        console.log(`Timer cancelado para thread ${threadId} - usuário ${message.author.username} respondeu`);
+
+        // Verificar se há um staff assignado e mencionar APENAS UMA VEZ
+        const assignment = threadAssignments.get(threadId);
+        if (assignment && assignment.staffId) {
+          try {
+            await message.reply({
+              content: `<@${assignment.staffId}>`,
+              allowedMentions: { users: [assignment.staffId] }
+            });
+          } catch (error) {
+            console.error('Erro ao mencionar staff:', error);
+          }
+        }
+      }
+    }
+  }
+
+  // Sistema de detecção de palavras-chave para usuários com cargo específico
+  if (!message.author.bot && message.member && message.content && !message.channel.isThread()) {
+    const targetRoleId = '1065441800032092241';
+
+    // Verificar se o usuário tem o cargo específico
+    if (message.member.roles.cache.has(targetRoleId)) {
+      // Sistema 1: Anti-@everyone
+      if (message.content.includes('@everyone')) {
+        console.log(`🚨 @everyone detectado de ${message.author.tag}`);
+
+        try {
+          // Deletar mensagem
+          await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+
+          // Aplicar mute de 28 dias
+          const muteDuration = 28 * 24 * 60 * 60 * 1000;
+          const muteUntil = new Date(Date.now() + muteDuration);
+
+          await message.member.timeout(muteDuration, `Tentativa de mencionar @everyone`);
+
+          // Enviar log no canal específico
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+
+          if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle('EVERYONE DETECTADO')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+**Canal:** ${message.channel}
+
+** DETECÇÃO:**
+• **Sistema:** Anti-everyone
+• **Tentativa:** Mencionar everyone
+
+** PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
+• **Duração:** 28 dias
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** Tentativa de mencionar everyone
+
+** AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 28 dias
+• Sistema de segurança anti-everyone ativo
+`)
+              .setColor('#ff0000')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: 'Sistema de Segurança Anti-@everyone • GIFZADA' })
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+
+          console.log(`✅ Usuário ${message.author.tag} mutado por 28 dias por tentativa de @everyone`);
+          return;
+
+        } catch (muteError) {
+          console.error('Erro ao aplicar mute por @everyone:', muteError);
+        }
+      }
+
+      // Sistema 2: Anti-spam de links Discord CDN
+      const discordCdnLinks = message.content.match(/https:\/\/media\.discordapp\.net[^\s]*/g) || [];
+
+      if (discordCdnLinks.length >= 4) {
+        console.log(`🚨 Spam de links detectado de ${message.author.tag}: ${discordCdnLinks.length} links`);
+
+        try {
+          // Deletar mensagem
+          await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+
+          // Aplicar mute de 28 dias
+          const muteDuration = 28 * 24 * 60 * 60 * 1000;
+          const muteUntil = new Date(Date.now() + muteDuration);
+
+          await message.member.timeout(muteDuration, `Spam de links: ${discordCdnLinks.length} links Discord CDN detectados`);
+
+          // Enviar log no canal específico
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+
+          if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle('SPAM DE LINKS DETECTADO')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+**Canal:** ${message.channel}
+
+**PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
+• **Duração:** 28 dias
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** Spam com ${discordCdnLinks.length} links Discord CDN
+
+**AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 28 dias
+• Sistema de detecção de spam de links ativo
+`)
+              .setColor('#ff0000')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: 'Sistema de Segurança Anti-Spam Links • GIFZADA' })
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+
+          console.log(`✅ Usuário ${message.author.tag} mutado por 28 dias por spam de links (${discordCdnLinks.length} links)`);
+          return;
+
+        } catch (muteError) {
+          console.error('Erro ao aplicar mute por spam de links:', muteError);
+        }
+      }
+
+      // Sistema 3: Detecção de palavras-chave suspeitas (banco de dados)
+      const suspiciousKeywords = await getSuspiciousKeywords();
+
+      const messageText = message.content.toLowerCase();
+      let keywordsFound = 0;
+      const foundWords = [];
+
+      // Contar quantas palavras-chave foram encontradas
+      for (const keyword of suspiciousKeywords) {
+        if (messageText.includes(keyword.toLowerCase())) {
+          keywordsFound++;
+          foundWords.push(keyword);
+        }
+      }
+
+      // Se encontrou 3 ou mais palavras-chave, aplicar timeout
+      if (keywordsFound >= 3) {
+        console.log(`🚨 Spam detectado de ${message.author.tag}: ${keywordsFound} palavras suspeitas encontradas`);
+
+        try {
+          // Deletar mensagem
+          await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+
+          // Aplicar mute de 28 dias (limite máximo do Discord)
+          const muteDuration = 28 * 24 * 60 * 60 * 1000; // 28 dias em ms
+          const muteUntil = new Date(Date.now() + muteDuration);
+
+          await message.member.timeout(muteDuration, `Spam Detection: ${keywordsFound} palavras suspeitas detectadas`);
+
+          // Enviar log no canal específico
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+
+          if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle('SPAM DETECTADO - PALAVRAS-CHAVE')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+**Canal:** ${message.channel}
+
+** PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
+• **Duração:** 28 dias (máximo permitido)
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** Spam com ${keywordsFound} palavras suspeitas
+
+** AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 28 dias
+• Sistema de detecção de spam ativo
+`)
+              .setColor('#ff0000')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: 'Sistema de Segurança Anti-Spam • GIFZADA' })
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+
+          console.log(`✅ Usuário ${message.author.tag} mutado por 28 dias por spam (${keywordsFound} palavras detectadas)`);
+
+        } catch (muteError) {
+          console.error('Erro ao aplicar mute por spam:', muteError);
+
+          // Se falhar o mute, pelo menos enviar log
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+
+          if (logChannel) {
+            const errorEmbed = new EmbedBuilder()
+              .setTitle('⚠️ TENTATIVA DE SPAM DETECTADA (ERRO AO MUTAR)')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**Palavras detectadas:** ${foundWords.join(', ')}
+**Erro:** Não foi possível aplicar mute automaticamente
+
+Mensagem foi deletada, mas requer intervenção manual.
+`)
+              .setColor('#ffaa00')
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [errorEmbed] });
+          }
+        }
+
+        // Parar processamento para não executar outros sistemas
+        return;
+      }
+    }
+  }
+
+  // Sistema de segurança OCR para detecção de fraudes
+  if (!message.author.bot && message.member && (message.attachments.size > 0 || message.content)) {
+    const targetRoleId = '1065441800032092241';
+
+    // Ignorar se a mensagem for enviada em uma thread
+    if (message.channel.isThread()) {
+      return;
+    }
+
+    // Verificar se o usuário tem o cargo específico
+    if (message.member.roles.cache.has(targetRoleId)) {
+      // Map para rastrear imagens duplicadas (URL -> canais)
+      if (!global.ocrImageTracking) global.ocrImageTracking = new Map();
+
+      // Processar cada anexo de imagem
+      for (const [attachmentId, attachment] of message.attachments) {
+        // Verificar se é imagem
+        if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+          try {
+            console.log(`🔍 Analisando imagem de ${message.author.tag} com OCR...`);
+
+            // Verificar se já processamos esta imagem
+            const imageUrl = attachment.url.split('?')[0]; // Remove query params para comparação
+            let imageData = global.ocrImageTracking.get(imageUrl);
+
+            if (!imageData) {
+              // Primeira vez que vemos esta imagem - analisar com OCR
+              const detectedText = await analyzeImageWithOCR(attachment.url);
+
+              imageData = {
+                text: detectedText,
+                channels: [message.channel.id],
+                author: message.author.id
+              };
+              global.ocrImageTracking.set(imageUrl, imageData);
+            } else {
+              // Imagem já foi analisada - apenas adicionar canal à lista
+              if (!imageData.channels.includes(message.channel.id)) {
+                imageData.channels.push(message.channel.id);
+              }
+            }
+
+            const detectedText = imageData.text;
+
+            if (detectedText) {
+              // Buscar palavras-chave bloqueadas
+              const blockedKeywords = await getBlockedKeywords();
+              const detectedTextLower = detectedText.toLowerCase();
+
+              // Verificar se alguma palavra-chave foi detectada
+              const foundKeyword = blockedKeywords.find(keyword => 
+                detectedTextLower.includes(keyword.toLowerCase())
+              );
+
+              if (foundKeyword) {
+                console.log(`🚨 Palavra-chave suspeita detectada: "${foundKeyword}" na imagem de ${message.author.tag}`);
+
+                // Deletar mensagem
+                await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+
+                // Aplicar mute de 20 dias
+                const muteDuration = 20 * 24 * 60 * 60 * 1000; // 20 dias em ms
+                const muteUntil = new Date(Date.now() + muteDuration);
+
+                try {
+                  await message.member.timeout(muteDuration, `OCR Fraud Detection: Palavra "${foundKeyword}" detectada na imagem`);
+
+                  // Enviar log no canal específico
+                  const logChannelId = '1426978891603640360';
+                  const logChannel = client.channels.cache.get(logChannelId);
+
+                  if (logChannel) {
+                    // Buscar informações dos canais
+                    const channelMentions = imageData.channels.map(chId => {
+                      const ch = client.channels.cache.get(chId);
+                      return ch ? `${ch}` : `ID: ${chId}`;
+                    }).join(', ');
+
+                    const logEmbed = new EmbedBuilder()
+                      .setTitle('🚨 FRAUDE DETECTADA POR OCR')
+                      .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+**Canal:** ${channelMentions}
+
+**📸 DETECÇÃO:**
+• **Sistema:** OCR
+• **Palavra suspeita:** \`${foundKeyword}\`
+
+**⚠️ PUNIÇÃO APLICADA:**
+• **Tipo:** Mute (Timeout)
+• **Duração:** 20 dias
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** Envio de imagem contendo conteúdo fraudulento
+
+**📋 AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 20 dias
+• Sistema de segurança OCR ativo
+`)
+                      .setColor('#ff0000')
+                      .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+                      .setImage(attachment.url)
+                      .setFooter({ text: 'Sistema de Segurança OCR • GIFZADA' })
+                      .setTimestamp();
+
+                    await logChannel.send({ embeds: [logEmbed] });
+                  }
+
+                  console.log(`✅ Usuário ${message.author.tag} mutado por 20 dias por OCR fraud detection`);
+
+                  // Limpar rastreamento desta imagem
+                  global.ocrImageTracking.delete(imageUrl);
+
+                } catch (muteError) {
+                  console.error('Erro ao aplicar mute:', muteError);
+
+                  // Se falhar o mute, pelo menos enviar log
+                  const logChannelId = '1426978891603640360';
+                  const logChannel = client.channels.cache.get(logChannelId);
+
+                  if (logChannel) {
+                    const errorEmbed = new EmbedBuilder()
+                      .setTitle('⚠️ TENTATIVA DE FRAUDE DETECTADA (ERRO AO MUTAR)')
+                      .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**Palavra detectada:** \`${foundKeyword}\`
+**Erro:** Não foi possível aplicar mute automaticamente
+
+Mensagem foi deletada, mas requer intervenção manual.
+`)
+                      .setColor('#ffaa00')
+                      .setTimestamp();
+
+                    await logChannel.send({ embeds: [errorEmbed] });
+                  }
+                }
+
+                // Parar de processar outros anexos
+                break;
+              }
+            }
+          } catch (ocrError) {
+            console.error('Erro no sistema OCR:', ocrError);
+          }
+        }
+      }
+
+      // Processar links de imagens no conteúdo da mensagem
+      const imageUrls = extractImageUrls(message.content);
+
+      for (const imageUrl of imageUrls) {
+        try {
+          console.log(`🔍 Analisando link de imagem de ${message.author.tag} com OCR...`);
+
+          // Verificar se já processamos esta imagem
+          const cleanUrl = imageUrl.split('?')[0];
+          let imageData = global.ocrImageTracking.get(cleanUrl);
+
+          if (!imageData) {
+            // Primeira vez que vemos esta imagem - analisar com OCR
+            const detectedText = await analyzeImageWithOCR(imageUrl);
+
+            imageData = {
+              text: detectedText,
+              channels: [message.channel.id],
+              author: message.author.id
+            };
+            global.ocrImageTracking.set(cleanUrl, imageData);
+          } else {
+            // Imagem já foi analisada - apenas adicionar canal à lista
+            if (!imageData.channels.includes(message.channel.id)) {
+              imageData.channels.push(message.channel.id);
+            }
+          }
+
+          const detectedText = imageData.text;
+
+          if (detectedText) {
+            // Buscar palavras-chave bloqueadas
+            const blockedKeywords = await getBlockedKeywords();
+            const detectedTextLower = detectedText.toLowerCase();
+
+            // Verificar se alguma palavra-chave foi detectada
+            const foundKeyword = blockedKeywords.find(keyword => 
+              detectedTextLower.includes(keyword.toLowerCase())
+            );
+
+            if (foundKeyword) {
+              console.log(`🚨 Palavra-chave suspeita detectada: "${foundKeyword}" no link de imagem de ${message.author.tag}`);
+
+              // Deletar mensagem
+              await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+
+              // Aplicar mute de 20 dias
+              const muteDuration = 20 * 24 * 60 * 60 * 1000;
+              const muteUntil = new Date(Date.now() + muteDuration);
+
+              try {
+                await message.member.timeout(muteDuration, `OCR Fraud Detection: Palavra "${foundKeyword}" detectada no link de imagem`);
+
+                // Enviar log no canal específico
+                const logChannelId = '1426978891603640360';
+                const logChannel = client.channels.cache.get(logChannelId);
+
+                if (logChannel) {
+                  const channelMentions = imageData.channels.map(chId => {
+                    const ch = client.channels.cache.get(chId);
+                    return ch ? `${ch}` : `ID: ${chId}`;
+                  }).join(', ');
+
+                  const logEmbed = new EmbedBuilder()
+                    .setTitle('🚨 FRAUDE DETECTADA POR OCR (LINK)')
+                    .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+**Canal:** ${channelMentions}
+
+**📸 DETECÇÃO:**
+• **Sistema:** OCR
+• **Tipo:** Link de imagem
+• **Palavra suspeita:** \`${foundKeyword}\`
+
+**⚠️ PUNIÇÃO APLICADA:**
+• **Tipo:** Mute (Timeout)
+• **Duração:** 20 dias
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** Envio de link contendo imagem com conteúdo fraudulento
+
+**📋 AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 20 dias
+• Sistema de segurança OCR ativo
+`)
+                    .setColor('#ff0000')
+                    .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+                    .setImage(imageUrl)
+                    .setFooter({ text: 'Sistema de Segurança OCR • GIFZADA' })
+                    .setTimestamp();
+
+                  await logChannel.send({ embeds: [logEmbed] });
+                }
+
+                console.log(`✅ Usuário ${message.author.tag} mutado por 20 dias por OCR fraud detection (link)`);
+
+                // Limpar rastreamento desta imagem
+                global.ocrImageTracking.delete(cleanUrl);
+
+              } catch (muteError) {
+                console.error('Erro ao aplicar mute:', muteError);
+
+                const logChannelId = '1426978891603640360';
+                const logChannel = client.channels.cache.get(logChannelId);
+
+                if (logChannel) {
+                  const errorEmbed = new EmbedBuilder()
+                    .setTitle('⚠️ TENTATIVA DE FRAUDE DETECTADA (ERRO AO MUTAR)')
+                    .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**Palavra detectada:** \`${foundKeyword}\`
+**Tipo:** Link de imagem
+**Erro:** Não foi possível aplicar mute automaticamente
+
+Mensagem foi deletada, mas requer intervenção manual.
+`)
+                    .setColor('#ffaa00')
+                    .setTimestamp();
+
+                  await logChannel.send({ embeds: [errorEmbed] });
+                }
+              }
+
+              // Parar de processar outros links
+              break;
+            }
+          }
+        } catch (ocrError) {
+          console.error('Erro no sistema OCR ao processar link:', ocrError);
+        }
+      }
+    }
+  }
+
   // Sistema de pontos automático multi-servidor
   if (!message.author.bot) {
     // Servidor Maker (1182331070750933073)
@@ -2596,7 +3768,7 @@ client.on('messageCreate', async message => {
   }
 
   // Sistema !sejamaker (apenas staff)
-  if (message.content === '!sejamaker') {
+  if (message.content === '!sejastaff') {
     // Verificar se o usuário tem o cargo de staff
     const staffRoleId = '1094385139976507523';
     const hasStaffRole = message.member.roles.cache.has(staffRoleId);
@@ -2609,24 +3781,28 @@ client.on('messageCreate', async message => {
     }
 
     const recruitmentEmbed = new EmbedBuilder()
-      .setTitle('<:d_tag:1366581862004166656>┊GIFZADA - RECRUTAMENTO')
+      .setTitle('┊GIFZADA - ÁREAS & RECRUTAMENTO')
       .setDescription(`
-<:1269199842866106458:1269199842866106458>
+**Faça parte da nossa STAFF!**
 
-<:1269198470309220385:1269198470309220385> Seja parte da STAFF!
+| **Por que ser STAFF?**
+Quer ajudar, criar, entreter ou movimentar a comunidade? Então esse espaço é pra você!
+Nossa equipe é formada por pessoas que fazem o servidor crescer — seja no suporte, na criação de conteúdo, na organização ou nas interações com os membros.
 
-<:1266748851050774540:1266748851050774540> | **Por que ser STAFF?**
-Você gosta de criar, editar e movimentar a comunidade? Então esse espaço é seu!
-Nossa equipe é formada por pessoas talentosas que mantêm o servidor vivo com conteúdos como GIFs, ícones, emojis e edições únicas.
+| **Áreas disponíveis:**
+• **Suporte**: Auxilie membros, cuide das denúncias e mantenha a ordem no servidor.
+• **Recrutamento**: Ajude a selecionar novos talentos para a equipe.
+• **Maker / Postador**: Crie e compartilhe conteúdos como GIFs, ícones, emojis e edições.
+• **Entretenimento**: Promova eventos, enquetes e atividades para a comunidade.
 
-<:1266748851050774540:1266748851050774540> | **O que esperamos de você?**
-• Comprometimento com a entrega de conteúdo criativo.
-• Participação ativa na comunidade.
-• Interesse em crescer dentro da equipe e em outras áreas — todos começam de base, mas podem subir de cargo!
+| **O que esperamos de você**:
+• Comprometimento com sua área e com o servidor.
+• Participação ativa e colaboração com outros membros da equipe.
+• Vontade de aprender e crescer dentro das funções — todos começam de base, mas podem evoluir!
 
-<:1266748851050774540:1266748851050774540> | **Já tem experiência?**
-<:1269198470309220385:1269198470309220385> Se você já foi staff em outros servidores de GIFs ou Comunidade, pode solicitar uma migração de cargo!
-Basta preencher o formulário na aba de migração e responder às perguntas com atenção.
+| **Já tem experiência?**
+Se você já fez parte de outras equipes de comunidades, pode solicitar migração de cargo!
+Basta preencher o formulário na aba de Migração e responder às perguntas com atenção.
 `)
       .setColor('#9c41ff')
       .setImage('https://media.discordapp.net/attachments/1381309996393959619/1399226611127029801/image.png?ex=68883ad4&is=6886e954&hm=7c8718351016bab3ab3f6bbd66388be0c0ed9dafd065142b8a3b2eb28ec69c45&=&format=webp&quality=lossless')
@@ -2937,6 +4113,71 @@ ${error.message}
 
       await loadingMessage.edit({ embeds: [errorEmbed] });
     }
+    return;
+  }
+
+  // Comando !deletethreads - Deletar TODAS threads de um canal
+  if (message.content.startsWith('!deletethreads ')) {
+    const requiredRoleId = '1274085555872731178';
+
+    // Verificar se o usuário tem o cargo necessário
+    if (!message.member.roles.cache.has(requiredRoleId)) {
+      return message.reply({
+        content: '❌ Você não tem permissão para usar este comando.',
+        flags: 1 << 6
+      });
+    }
+
+    const channelId = message.content.split(' ')[1];
+
+    if (!channelId) {
+      return message.reply({
+        content: '❌ Por favor, forneça o ID do canal.\n**Uso:** `!deletethreads [ID_DO_CANAL]`',
+        flags: 1 << 6
+      });
+    }
+
+    const targetChannel = client.channels.cache.get(channelId);
+
+    if (!targetChannel) {
+      return message.reply({
+        content: '❌ Canal não encontrado. Verifique se o ID está correto.',
+        flags: 1 << 6
+      });
+    }
+
+    // Embed de confirmação
+    const confirmEmbed = new EmbedBuilder()
+      .setTitle('⚠️ **CONFIRMAÇÃO DE EXCLUSÃO**')
+      .setDescription(`
+**ATENÇÃO: Esta ação é irreversível!**
+
+**Canal alvo:** ${targetChannel}
+**Ação:** Deletar TODAS as threads (ativas e arquivadas)
+
+Você tem certeza que deseja continuar?
+
+> ⚠️ *Todas as threads serão permanentemente deletadas*
+`)
+      .setColor('#ff4444')
+      .setTimestamp();
+
+    const confirmButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`confirm_delete_threads_${channelId}_${message.author.id}`)
+        .setLabel('Sim, Deletar Todas')
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('cancel_delete_threads')
+        .setLabel('Cancelar')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await message.reply({
+      embeds: [confirmEmbed],
+      components: [confirmButtons]
+    });
     return;
   }
 
@@ -3486,6 +4727,514 @@ Selecione uma área para acessar suas funções específicas:
     );
 
     await message.channel.send({ embeds: [verificationEmbed], components: [verificationRow] });
+  }
+
+  // Comando !config para gerenciar palavras-chave (OCR e Suspicious)
+  if (message.content.startsWith('!config')) {
+    const adminRoles = ['1065441743379628043', '1065441744726020126', '1065441745875243008', '1317652394351525959', '1386492093303885907'];
+    const hasAdminRole = message.member && message.member.roles.cache.some(role => adminRoles.includes(role.id));
+
+    if (!hasAdminRole) {
+      return message.reply('❌ Apenas administradores podem configurar os sistemas de segurança.');
+    }
+
+    const args = message.content.split(' ');
+    const systemType = args[1]?.toLowerCase();
+
+    if (!systemType || (systemType !== 'ocr' && systemType !== 'suspicious' && systemType !== 'list')) {
+      const helpEmbed = new EmbedBuilder()
+        .setTitle('⚙️ SISTEMAS DE SEGURANÇA')
+        .setDescription(`
+**SISTEMAS DISPONÍVEIS:**
+
+🔍 **OCR** - Detecção de fraudes em imagens
+• \`!config ocr list\` - Lista palavras do OCR
+• \`!config ocr add <palavra>\` - Adiciona palavra ao OCR
+• \`!config ocr remove <palavra>\` - Remove palavra do OCR
+• \`!config ocr clear\` - Limpa todas as palavras do OCR
+• \`!config ocr stats\` - Estatísticas do sistema OCR
+
+🚨 **SUSPICIOUS** - Detecção de spam por palavras
+• \`!config suspicious list\` - Lista palavras suspeitas
+• \`!config suspicious add <palavra>\` - Adiciona palavra suspeita
+• \`!config suspicious remove <palavra>\` - Remove palavra suspeita
+• \`!config suspicious clear\` - Limpa todas as palavras suspeitas
+• \`!config suspicious stats\` - Estatísticas do sistema anti-spam
+
+**Exemplo de uso:**
+\`!config ocr add giveaway\`
+\`!config suspicious add brinde\`
+`)
+        .setColor('#4169e1')
+        .setFooter({ text: 'Sistemas de Segurança GIFZADA' })
+        .setTimestamp();
+
+      return message.reply({ embeds: [helpEmbed] });
+    }
+
+    const subcommand = args[2]?.toLowerCase();
+
+    // Sistema OCR
+    if (systemType === 'ocr') {
+      if (!subcommand || subcommand === 'list') {
+      // Listar palavras-chave bloqueadas
+      const keywords = await getBlockedKeywords();
+
+      // Organizar em colunas para melhor visualização
+      let keywordsList = '';
+      if (keywords.length > 0) {
+        const columns = 3;
+        const rows = Math.ceil(keywords.length / columns);
+
+        for (let i = 0; i < rows; i++) {
+          const row = [];
+          for (let j = 0; j < columns; j++) {
+            const index = i + (j * rows);
+            if (index < keywords.length) {
+              row.push(`\`${keywords[index]}\``);
+            }
+          }
+          keywordsList += row.join(' • ') + '\n';
+        }
+      } else {
+        keywordsList = '*Nenhuma palavra-chave configurada*';
+      }
+
+      const listEmbed = new EmbedBuilder()
+        .setTitle('SISTEMA DE SEGURANÇA OCR')
+        .setDescription(`
+##  **PALAVRAS-CHAVE BLOQUEADAS:**
+
+${keywordsList}
+
+##  **COMANDOS DISPONÍVEIS:**
+
+\`\`\`
+!config list              Lista todas as palavras
+!config add <palavra>     Adiciona nova palavra
+!config remove <palavra>  Remove palavra existente
+!config clear             Remove TODAS (com confirmação)
+!config stats             Mostra estatísticas do sistema
+\`\`\`
+
+##  **FUNCIONAMENTO:**
+
+• **Alvo:** Imagens do cargo <@&1065441800032092241>
+• **Ação:** Mute de 20 dias se palavra detectada
+• **Logs:** Enviados em <#1426978891603640360>
+• **Tecnologia:** OCR (Tesseract.js)
+
+##  **ESTATÍSTICAS ATUAIS:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Sem palavras'}
+• **Última atualização:** ${new Date().toLocaleString('pt-BR')}
+`)
+        .setColor(keywords.length > 0 ? '#00ff88' : '#ffaa00')
+        .setFooter({ text: `Sistema OCR GIFZADA • ${keywords.length} palavra(s) bloqueada(s)` })
+        .setTimestamp();
+
+      return message.reply({ embeds: [listEmbed] });
+    }
+
+      if (subcommand === 'add') {
+      const keyword = args.slice(3).join(' ').trim().toLowerCase();
+
+      if (!keyword) {
+        return message.reply('❌ **Uso:** `!config ocr add <palavra>`\n\n**Exemplo:** `!config ocr add giveaway`');
+      }
+
+      if (keyword.length < 2) {
+        return message.reply('❌ A palavra deve ter pelo menos 2 caracteres.');
+      }
+
+      const success = await addBlockedKeyword(keyword, message.author.id);
+
+      if (success) {
+        const keywords = await getBlockedKeywords();
+
+        const addEmbed = new EmbedBuilder()
+          .setTitle(' PALAVRA-CHAVE ADICIONADA')
+          .setDescription(`
+##  **NOVA PALAVRA BLOQUEADA:**
+
+**Palavra:** \`${keyword}\`
+**Adicionada por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+##  **SISTEMA ATUALIZADO:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** Ativo e monitorando
+
+##  **AÇÃO AUTOMÁTICA:**
+
+Agora o sistema OCR detectará \`${keyword}\` em imagens e:
+1. Deletará a mensagem automaticamente
+2. Aplicará mute de 20 dias no usuário
+3. Enviará log detalhado em <#1426978891603640360>
+
+>  *Sistema de segurança atualizado com sucesso!*
+`)
+          .setColor('#00ff88')
+          .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'SISTEMA OCR GIFZADA • Palavra Adicionada' })
+          .setTimestamp();
+
+        return message.reply({ embeds: [addEmbed] });
+      } else {
+        return message.reply('❌ Erro ao adicionar palavra-chave. Ela já pode existir na lista.');
+      }
+    }
+
+      if (subcommand === 'remove') {
+      const keyword = args.slice(3).join(' ').trim().toLowerCase();
+
+      if (!keyword) {
+        return message.reply('❌ **Uso:** `!config ocr remove <palavra>`\n\n**Exemplo:** `!config ocr remove giveaway`');
+      }
+
+      const success = await removeBlockedKeyword(keyword);
+
+      if (success) {
+        const keywords = await getBlockedKeywords();
+
+        const removeEmbed = new EmbedBuilder()
+          .setTitle(' PALAVRA-CHAVE REMOVIDA')
+          .setDescription(`
+##  **PALAVRA DESBLOQUEADA:**
+
+**Palavra:** \`${keyword}\`
+**Removida por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+##  **SISTEMA ATUALIZADO:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Sem palavras'}
+
+##  **ATENÇÃO:**
+
+Esta palavra não será mais detectada pelo sistema OCR.
+Imagens contendo \`${keyword}\` não serão mais bloqueadas.
+
+>  *Sistema de segurança atualizado!*
+`)
+          .setColor('#ff6b6b')
+          .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'SISTEMA OCR GIFZADA • Palavra Removida' })
+          .setTimestamp();
+
+        return message.reply({ embeds: [removeEmbed] });
+      } else {
+        return message.reply('❌ Palavra-chave não encontrada na lista. Use `!config ocr list` para ver todas.');
+      }
+    }
+
+      if (subcommand === 'clear') {
+      const keywords = await getBlockedKeywords();
+
+      if (keywords.length === 0) {
+        return message.reply('❌ Não há palavras-chave para remover.');
+      }
+
+      const confirmEmbed = new EmbedBuilder()
+        .setTitle(' CONFIRMAÇÃO DE LIMPEZA')
+        .setDescription(`
+**ATENÇÃO: Esta ação removerá TODAS as palavras-chave!**
+
+**Total a remover:** ${keywords.length} palavra(s)
+
+Você tem certeza que deseja continuar?
+
+>  *Esta ação não pode ser desfeita!*
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      const confirmButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`config_clear_confirm_${message.author.id}`)
+          .setLabel('Sim, Limpar Tudo')
+          .setEmoji('🗑️')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('config_clear_cancel')
+          .setLabel('Cancelar')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return message.reply({ embeds: [confirmEmbed], components: [confirmButtons] });
+    }
+
+      if (subcommand === 'stats') {
+      const keywords = await getBlockedKeywords();
+
+      const statsEmbed = new EmbedBuilder()
+        .setTitle(' ESTATÍSTICAS DO SISTEMA OCR')
+        .setDescription(`
+##  **NÚMEROS:**
+
+• **Palavras bloqueadas:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Inativo'}
+• **Cargo monitorado:** <@&1065441800032092241>
+• **Canal de logs:** <#1426978891603640360>
+
+##  **CONFIGURAÇÕES:**
+
+• **Tecnologia:** Tesseract.js OCR
+• **Punição:** Mute de 20 dias
+• **Ação:** Automática
+• **Delay análise:** ~2-5 segundos por imagem
+
+##  **PALAVRAS CONFIGURADAS:**
+
+${keywords.length > 0 ? keywords.slice(0, 10).map((kw, i) => `${i + 1}. \`${kw}\``).join('\n') : '*Nenhuma palavra configurada*'}
+${keywords.length > 10 ? `\n*... e mais ${keywords.length - 10} palavra(s)*` : ''}
+
+##  **DICA:**
+
+Use \`!config ocr list\` para ver todas as palavras bloqueadas.
+`)
+        .setColor('#4169e1')
+        .setFooter({ text: `Sistema OCR GIFZADA • Atualizado em ${new Date().toLocaleDateString('pt-BR')}` })
+        .setTimestamp();
+
+      return message.reply({ embeds: [statsEmbed] });
+    }
+
+      return message.reply('❌ **Subcomando inválido para OCR.**\n\n**Comandos disponíveis:**\n• `!config ocr list`\n• `!config ocr add <palavra>`\n• `!config ocr remove <palavra>`\n• `!config ocr clear`\n• `!config ocr stats`');
+    }
+
+    // Sistema SUSPICIOUS
+    if (systemType === 'suspicious') {
+      if (!subcommand || subcommand === 'list') {
+      const keywords = await getSuspiciousKeywords();
+
+      let keywordsList = '';
+      if (keywords.length > 0) {
+        const columns = 3;
+        const rows = Math.ceil(keywords.length / columns);
+
+        for (let i = 0; i < rows; i++) {
+          const row = [];
+          for (let j = 0; j < columns; j++) {
+            const index = i + (j * rows);
+            if (index < keywords.length) {
+              row.push(`\`${keywords[index]}\``);
+            }
+          }
+          keywordsList += row.join(' • ') + '\n';
+        }
+      } else {
+        keywordsList = '*Nenhuma palavra-chave configurada*';
+      }
+
+      const listEmbed = new EmbedBuilder()
+        .setTitle('🚨 SISTEMA ANTI-SPAM (SUSPICIOUS)')
+        .setDescription(`
+##  **PALAVRAS-CHAVE SUSPEITAS:**
+
+${keywordsList}
+
+##  **COMANDOS DISPONÍVEIS:**
+
+\`\`\`
+!config suspicious list              Lista todas as palavras
+!config suspicious add <palavra>     Adiciona nova palavra
+!config suspicious remove <palavra>  Remove palavra existente
+!config suspicious clear             Remove TODAS (com confirmação)
+!config suspicious stats             Mostra estatísticas do sistema
+\`\`\`
+
+##  **FUNCIONAMENTO:**
+
+• **Alvo:** Mensagens do cargo <@&1065441800032092241>
+• **Condição:** 3 ou mais palavras detectadas na mesma mensagem
+• **Ação:** Mute de 28 dias e deleção da mensagem
+• **Logs:** Enviados em <#1426978891603640360>
+
+##  **ESTATÍSTICAS ATUAIS:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Sem palavras'}
+• **Última atualização:** ${new Date().toLocaleString('pt-BR')}
+`)
+        .setColor(keywords.length > 0 ? '#ff4444' : '#ffaa00')
+        .setFooter({ text: `Sistema Anti-Spam GIFZADA • ${keywords.length} palavra(s) suspeita(s)` })
+        .setTimestamp();
+
+      return message.reply({ embeds: [listEmbed] });
+    }
+
+      if (subcommand === 'add') {
+      const keyword = args.slice(3).join(' ').trim().toLowerCase();
+
+      if (!keyword) {
+        return message.reply('❌ **Uso:** `!config suspicious add <palavra>`\n\n**Exemplo:** `!config suspicious add brinde`');
+      }
+
+      if (keyword.length < 2) {
+        return message.reply('❌ A palavra deve ter pelo menos 2 caracteres.');
+      }
+
+      const success = await addSuspiciousKeyword(keyword, message.author.id);
+
+      if (success) {
+        const keywords = await getSuspiciousKeywords();
+
+        const addEmbed = new EmbedBuilder()
+          .setTitle('✅ PALAVRA SUSPEITA ADICIONADA')
+          .setDescription(`
+##  **NOVA PALAVRA SUSPEITA:**
+
+**Palavra:** \`${keyword}\`
+**Adicionada por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+##  **SISTEMA ATUALIZADO:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** Ativo e monitorando
+
+##  **AÇÃO AUTOMÁTICA:**
+
+Se uma mensagem contiver \`${keyword}\` junto com 2+ outras palavras suspeitas:
+1. Mensagem será deletada automaticamente
+2. Usuário receberá mute de 28 dias
+3. Log detalhado será enviado em <#1426978891603640360>
+
+>  *Sistema anti-spam atualizado com sucesso!*
+`)
+          .setColor('#ff4444')
+          .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'Sistema Anti-Spam GIFZADA • Palavra Adicionada' })
+          .setTimestamp();
+
+        return message.reply({ embeds: [addEmbed] });
+      } else {
+        return message.reply('❌ Erro ao adicionar palavra-chave. Ela já pode existir na lista.');
+      }
+    }
+
+      if (subcommand === 'remove') {
+      const keyword = args.slice(3).join(' ').trim().toLowerCase();
+
+      if (!keyword) {
+        return message.reply('❌ **Uso:** `!config suspicious remove <palavra>`\n\n**Exemplo:** `!config suspicious remove brinde`');
+      }
+
+      const success = await removeSuspiciousKeyword(keyword);
+
+      if (success) {
+        const keywords = await getSuspiciousKeywords();
+
+        const removeEmbed = new EmbedBuilder()
+          .setTitle('✅ PALAVRA SUSPEITA REMOVIDA')
+          .setDescription(`
+##  **PALAVRA REMOVIDA:**
+
+**Palavra:** \`${keyword}\`
+**Removida por:** ${message.author}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+
+##  **SISTEMA ATUALIZADO:**
+
+• **Total de palavras:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Sem palavras'}
+
+##  **ATENÇÃO:**
+
+Esta palavra não será mais considerada suspeita.
+Mensagens contendo \`${keyword}\` não contribuirão para detecção de spam.
+
+>  *Sistema anti-spam atualizado!*
+`)
+          .setColor('#ffaa00')
+          .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+          .setFooter({ text: 'Sistema Anti-Spam GIFZADA • Palavra Removida' })
+          .setTimestamp();
+
+        return message.reply({ embeds: [removeEmbed] });
+      } else {
+        return message.reply('❌ Palavra-chave não encontrada na lista. Use `!config suspicious list` para ver todas.');
+      }
+    }
+
+      if (subcommand === 'clear') {
+      const keywords = await getSuspiciousKeywords();
+
+      if (keywords.length === 0) {
+        return message.reply('❌ Não há palavras-chave para remover.');
+      }
+
+      const confirmEmbed = new EmbedBuilder()
+        .setTitle('⚠️ CONFIRMAÇÃO DE LIMPEZA')
+        .setDescription(`
+**ATENÇÃO: Esta ação removerá TODAS as palavras suspeitas!**
+
+**Total a remover:** ${keywords.length} palavra(s)
+
+Você tem certeza que deseja continuar?
+
+>  *Esta ação não pode ser desfeita!*
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      const confirmButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`config_suspicious_clear_confirm_${message.author.id}`)
+          .setLabel('Sim, Limpar Tudo')
+          .setEmoji('🗑️')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('config_suspicious_clear_cancel')
+          .setLabel('Cancelar')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      return message.reply({ embeds: [confirmEmbed], components: [confirmButtons] });
+    }
+
+      if (subcommand === 'stats') {
+      const keywords = await getSuspiciousKeywords();
+
+      const statsEmbed = new EmbedBuilder()
+        .setTitle('📊 ESTATÍSTICAS DO SISTEMA ANTI-SPAM')
+        .setDescription(`
+##  **NÚMEROS:**
+
+• **Palavras suspeitas:** ${keywords.length}
+• **Status:** ${keywords.length > 0 ? '🟢 Ativo' : '🟡 Inativo'}
+• **Cargo monitorado:** <@&1065441800032092241>
+• **Canal de logs:** <#1426978891603640360>
+
+##  **CONFIGURAÇÕES:**
+
+• **Threshold:** 3 ou mais palavras na mesma mensagem
+• **Punição:** Mute de 28 dias (máximo Discord)
+• **Ação:** Automática e instantânea
+• **Detecção:** Texto em minúsculas
+
+##  **PALAVRAS CONFIGURADAS:**
+
+${keywords.length > 0 ? keywords.slice(0, 10).map((kw, i) => `${i + 1}. \`${kw}\``).join('\n') : '*Nenhuma palavra configurada*'}
+${keywords.length > 10 ? `\n*... e mais ${keywords.length - 10} palavra(s)*` : ''}
+
+##  **DICA:**
+
+Use \`!config suspicious list\` para ver todas as palavras suspeitas.
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: `Sistema Anti-Spam GIFZADA • Atualizado em ${new Date().toLocaleDateString('pt-BR')}` })
+        .setTimestamp();
+
+      return message.reply({ embeds: [statsEmbed] });
+    }
+
+      return message.reply('❌ **Subcomando inválido para SUSPICIOUS.**\n\n**Comandos disponíveis:**\n• `!config suspicious list`\n• `!config suspicious add <palavra>`\n• `!config suspicious remove <palavra>`\n• `!config suspicious clear`\n• `!config suspicious stats`');
+    }
   }
 
   // Comando !shardcloud
@@ -4249,7 +5998,7 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
     }
 
     const args = message.content.split(' ');
-    
+
     // Verificar se foi fornecido um canal
     if (args.length < 2) {
       return message.reply('❌ **Uso correto:** `!criarwebhook #canal [nome]`\n\n**Exemplo:** `!criarwebhook #general Webhook Bot`');
@@ -4257,7 +6006,7 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
 
     // Extrair canal mencionado ou ID
     let targetChannel = null;
-    
+
     if (message.mentions.channels.size > 0) {
       targetChannel = message.mentions.channels.first();
     } else {
@@ -4328,9 +6077,9 @@ ${bioCheck.bio || 'Nenhuma descrição encontrada'}
 
     } catch (error) {
       console.error('Erro ao criar webhook:', error);
-      
+
       let errorMessage = '❌ Erro ao criar webhook.';
-      
+
       if (error.code === 50013) {
         errorMessage = '❌ Não tenho permissão para criar webhooks neste canal.';
       } else if (error.code === 30007) {
@@ -4578,30 +6327,634 @@ ${rankingText}
       await message.reply('❌ Erro ao buscar as estatísticas. Tente novamente.');
     }
   }
-});
 
-// Listener para banimentos - enviar log quando um usuário for banido
-client.on('guildBanAdd', async ban => {
-  try {
-    const logChannelId = '1374832443814580244';
-    const logChannel = client.channels.cache.get(logChannelId);
+  if (message.content === '!halloween') {
+    try {
+      await message.delete().catch(() => {});
 
-    if (!logChannel) {
-      console.log('Canal de log de banimentos não encontrado');
+      const halloweenEmbed = new EmbedBuilder()
+        .setTitle('<:witchhat:1428900860716519504> Halloween GIFZADA <:witchhat:1428900860716519504>')
+        .setDescription(`
+<:balloons:1428900819096440933> **O Halloween chegou no GIFZADA!**
+
+É hora de entrar no clima de terror, diversão e recompensas!
+
+<:halloween:1428901352989528074> **Como participar:**
+
+Clique no botão abaixo para garantir seu cargo exclusivo de Halloween <@&1428894013418901616>.
+
+Os cargos são limitados, então pegue o seu antes que desapareçam!
+
+<:candy:1428900775513296998> **Ganhe Doces:**
+
+Converse no chat normalmente e ganhe Doces por participar.
+
+Responda quizzes especiais que aparecerão no chat para ganhar ainda mais Doces!
+
+Acumule moedas e troque por recompensas exclusivas de Halloween no servidor.
+
+**participe do evento e divirta-se com o GIFZADA durante toda a temporada de Halloween!**
+`)
+        .setColor('#FF6600')
+        .setTimestamp();
+
+      const halloweenButton = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('halloween_role_toggle')
+            .setLabel('Boo!')
+          .setEmoji('<:ghost:1428905988752146533>')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+      await message.channel.send({
+        embeds: [halloweenEmbed],
+        components: [halloweenButton]
+      });
+
+    } catch (error) {
+      console.error('Erro no comando !halloween:', error);
+    }
+    return;
+  }
+
+  if (message.content === '!doces') {
+    try {
+      const user = await getOrCreateEconomyUser(message.author.id, message.author.username);
+
+      if (!user) {
+        return message.reply('❌ Erro ao buscar seus doces. Tente novamente.');
+      }
+
+      const docesEmbed = new EmbedBuilder()
+        .setTitle('<:halloween:1428901352989528074> Seus Doces de Halloween')
+        .setDescription(`
+**${message.author.username}**, você possui:
+
+<:candy:1428900775513296998> **${user.doces} Doces**
+
+> Use \`!docesoutravessuras\` para ganhar doces diários!
+> Use \`!loja\` para ver o que pode trocar!
+`)
+        .setColor('#FF6600')
+        .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+        .setTimestamp();
+
+      await message.reply({ embeds: [docesEmbed] });
+    } catch (error) {
+      console.error('Erro no comando !doces:', error);
+      await message.reply('❌ Erro ao buscar doces. Tente novamente.');
+    }
+    return;
+  }
+
+  if (message.content === '!loja') {
+    const lojaEmbed = new EmbedBuilder()
+      .setTitle('<:halloween:1428901352989528074> Loja de Halloween')
+      .setDescription(`
+ **EM REFORMA PARA O HALLOWEEN!**
+
+A loja está sendo decorada com teias de aranha e abóboras assustadoras! 
+
+ Volte em breve para conferir as recompensas exclusivas de Halloween que você poderá trocar com seus doces!
+
+ Continue acumulando doces com \`!docesoutravessuras\` enquanto isso!
+`)
+      .setColor('#FF6600')
+
+      .setTimestamp();
+
+    await message.reply({ embeds: [lojaEmbed] });
+    return;
+  }
+
+  if (message.content === '!docesoutravessuras') {
+    try {
+      const canClaim = await canUseDaily(message.author.id);
+
+      if (!canClaim) {
+        const user = await getOrCreateEconomyUser(message.author.id, message.author.username);
+        const lastDaily = new Date(user.last_daily);
+        const nextDaily = new Date(lastDaily.getTime() + 24 * 60 * 60 * 1000);
+        const timeLeft = nextDaily - new Date();
+        const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
+        const minutesLeft = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+
+        const cooldownEmbed = new EmbedBuilder()
+          .setTitle('Doces ou Travessuras em Cooldown!')
+          .setDescription(`
+Você já coletou seus doces hoje!
+
+**Tempo restante:** ${hoursLeft}h ${minutesLeft}m
+
+> Volte mais tarde para coletar mais doces! <:ghost:1428905988752146533>
+`)
+          .setColor('#FF4444')
+          .setTimestamp();
+
+        return message.reply({ embeds: [cooldownEmbed] });
+      }
+
+      const docesGanhos = Math.floor(Math.random() * (230 - 30 + 1)) + 30;
+
+      await addDoces(message.author.id, message.author.username, docesGanhos);
+      await updateDailyTimestamp(message.author.id);
+
+      const user = await getOrCreateEconomyUser(message.author.id, message.author.username);
+
+      const dailyEmbed = new EmbedBuilder()
+        .setTitle('<:witchhat:1428900860716519504> Doces ou Travessuras!')
+        .setDescription(`
+**${message.author.username}** foi de porta em porta e coletou:
+
+<:candy:1428900775513296998> **+${docesGanhos} Doces!**
+
+**Total de doces:** ${user.doces} <:halloween:1428901352989528074>
+
+> Volte em 24 horas para coletar mais! <:ghost:1428905988752146533>
+`)
+        .setColor('#00FF00')
+        .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+        .setTimestamp();
+
+      await message.reply({ embeds: [dailyEmbed] });
+    } catch (error) {
+      console.error('Erro no comando !docesoutravessuras:', error);
+      await message.reply('❌ Erro ao coletar doces. Tente novamente.');
+    }
+    return;
+  }
+
+  if (message.content === '!nivel') {
+    try {
+      const user = await getOrCreateEconomyUser(message.author.id, message.author.username);
+
+      if (!user) {
+        return message.reply('❌ Erro ao buscar seu nível. Tente novamente.');
+      }
+
+      const isBooster = message.member.roles.cache.has('886376407951876177');
+      const xpForNextLevel = getXPForLevel(user.nivel);
+      const progress = Math.floor((user.xp / xpForNextLevel) * 100);
+      const progressBar = '█'.repeat(Math.floor(progress / 10)) + '░'.repeat(10 - Math.floor(progress / 10));
+
+      const nivelEmbed = new EmbedBuilder()
+        .setTitle(`📊 Nível de ${message.author.username}`)
+        .setDescription(`
+**Nível Atual:** ${user.nivel} 🎃
+
+**XP:** ${user.xp} / ${xpForNextLevel}
+
+**Progresso:**
+\`${progressBar}\` ${progress}%
+
+${isBooster ? '⚡ **BOOSTER ATIVO** - Você ganha **2x XP**!' : '💡 *Seja booster do servidor para ganhar 2x XP!*'}
+
+> Envie mensagens no <#1316427226039718031> para ganhar XP!
+`)
+        .setColor(isBooster ? '#FFD700' : '#FF6600')
+        .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+        .addFields(
+          { name: '🍬 Doces', value: `${user.doces}`, inline: true },
+          { name: '📈 Próximo Nível', value: `${user.nivel + 1}`, inline: true }
+        )
+        .setTimestamp();
+
+      await message.reply({ embeds: [nivelEmbed] });
+    } catch (error) {
+      console.error('Erro no comando !nivel:', error);
+      await message.reply('❌ Erro ao buscar nível. Tente novamente.');
+    }
+    return;
+  }
+
+  if (message.content.startsWith('!ban')) {
+    if (!message.member.permissions.has('BanMembers')) {
+      return message.reply('❌ Você não tem permissão para banir membros.');
+    }
+
+    const args = message.content.slice(4).trim().split(/ +/);
+
+    if (args.length < 1 || !args[0]) {
+      return message.reply('❌ Uso correto: `!ban [ID/MENÇÃO] [MOTIVO (opcional)]`');
+    }
+
+    let targetId = args[0].replace(/[<@!>]/g, '');
+    const reason = args.slice(1).join(' ') || 'Sem motivo especificado';
+
+    try {
+      // Lista de cargos protegidos
+      const protectedRoles = [
+        '1385756391284805713',
+        '1065441743379628043',
+        '1428102553224220844',
+        '1065441744726020126',
+        '1386493660010516693',
+        '1317652394351525959',
+        '1399068298741551194',
+        '1386492093303885907',
+        '1065441745875243008',
+        '1065441747305508916',
+        '1285648807501238344',
+        '1065441748446359584',
+        '1399068247646797955',
+        '1065441749947928656',
+        '953748686884716574'
+      ];
+
+      // Verificar se o alvo possui algum cargo protegido
+      const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
+      if (targetMember && targetMember.roles.cache.some(role => protectedRoles.includes(role.id))) {
+        // Apenas apagar o comando sem responder
+        await message.delete().catch(() => {});
+        return;
+      }
+
+      const targetUser = await client.users.fetch(targetId);
+
+      await registerModerationAction('ban', targetId, message.author.id, reason, true);
+
+      try {
+        await message.guild.members.ban(targetId, { reason: reason });
+      } catch (banError) {
+        await pgClient.query(
+          'DELETE FROM moderation_actions WHERE action_type = $1 AND target_user_id = $2 AND moderator_id = $3 AND executed_at > NOW() - INTERVAL \'5 seconds\'',
+          ['ban', targetId, message.author.id]
+        );
+        throw banError;
+      }
+
+      const banEmbed = new EmbedBuilder()
+        .setTitle('USUÁRIO BANIDO')
+        .setDescription('Ação de banimento executada com sucesso')
+        .setColor('#ff0000')
+        .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+        .addFields(
+          { name: 'Usuário', value: `${targetUser.tag}`, inline: true },
+          { name: 'ID', value: `${targetId}`, inline: true },
+          { name: 'Moderador', value: `${message.author.tag}`, inline: false },
+          { name: 'Motivo', value: reason, inline: false },
+          { name: 'Data e Hora', value: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }), inline: false }
+        )
+        .setFooter({ text: `Banido por ${message.author.username}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+        .setTimestamp();
+
+      await message.reply({ embeds: [banEmbed] });
+
+      // Enviar log de banimento por comando no canal 1426978891603640360
+      const logChannelId = '1426978891603640360';
+      const logChannel = client.channels.cache.get(logChannelId);
+
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder()
+          .setTitle('LOG DE BANIMENTO')
+          .setDescription('Registro de ação de moderação')
+          .setColor('#ff0000')
+          .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+          .addFields(
+            { name: 'Usuário Banido', value: `${targetUser.tag}`, inline: true },
+            { name: 'ID do Usuário', value: targetId, inline: true },
+            { name: 'Moderador', value: `${message.author.tag}`, inline: true },
+            { name: 'ID do Moderador', value: message.author.id, inline: true },
+            { name: 'Motivo', value: reason, inline: false },
+            { name: 'Data e Hora', value: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }), inline: false }
+          )
+          .setFooter({ text: 'Sistema de Logs de Moderação', iconURL: message.guild.iconURL({ dynamic: true }) })
+          .setTimestamp();
+
+        await logChannel.send({ embeds: [logEmbed] });
+      }
+
+    } catch (error) {
+      console.error('Erro ao banir:', error);
+      await message.reply('❌ Erro ao banir o usuário. Verifique o ID e tente novamente.');
+    }
+  }
+
+  if (message.content.startsWith('!unban')) {
+    if (!message.member.permissions.has('BanMembers')) {
+      return message.reply('❌ Você não tem permissão para desbanir membros.');
+    }
+
+    const args = message.content.slice(6).trim().split(/ +/);
+
+    if (args.length < 1) {
+      return message.reply('❌ Uso correto: `!unban [ID]`');
+    }
+
+    let targetId = args[0];
+
+    try {
+      const targetUser = await client.users.fetch(targetId).catch(() => null);
+      await message.guild.members.unban(targetId);
+
+      const unbanEmbed = new EmbedBuilder()
+        .setTitle('USUÁRIO DESBANIDO')
+        .setDescription('Ação de desbanimento executada com sucesso')
+        .setColor('#00ff88')
+        .setThumbnail(targetUser ? targetUser.displayAvatarURL({ dynamic: true, size: 256 }) : message.guild.iconURL({ dynamic: true, size: 256 }))
+        .addFields(
+          { name: 'ID do Usuário', value: targetId, inline: true },
+          { name: 'Moderador', value: `${message.author.tag}`, inline: true },
+          { name: 'Usuário', value: targetUser ? targetUser.tag : 'Usuário não encontrado', inline: false },
+          { name: 'Data e Hora', value: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }), inline: false }
+        )
+        .setFooter({ text: `Desbanido por ${message.author.username}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+        .setTimestamp();
+
+      await message.reply({ embeds: [unbanEmbed] });
+
+    } catch (error) {
+      console.error('Erro ao desbanir:', error);
+      await message.reply('❌ Erro ao desbanir o usuário. Verifique o ID e tente novamente.');
+    }
+  }
+
+  if (message.content.startsWith('!kick')) {
+    if (!message.member.permissions.has('KickMembers')) {
+      return message.reply('❌ Você não tem permissão para expulsar membros.');
+    }
+
+    const args = message.content.slice(5).trim().split(/ +/);
+
+    if (args.length < 1 || !args[0]) {
+      return message.reply('❌ Uso correto: `!kick [ID/MENÇÃO] [MOTIVO (opcional)]`');
+    }
+
+    let targetId = args[0].replace(/[<@!>]/g, '');
+    const reason = args.slice(1).join(' ') || 'Sem motivo especificado';
+
+    try {
+      // Lista de cargos protegidos
+      const protectedRoles = [
+        '1385756391284805713',
+        '1065441743379628043',
+        '1428102553224220844',
+        '1065441744726020126',
+        '1386493660010516693',
+        '1317652394351525959',
+        '1399068298741551194',
+        '1386492093303885907',
+        '1065441745875243008',
+        '1065441747305508916',
+        '1285648807501238344',
+        '1065441748446359584',
+        '1399068247646797955',
+        '1065441749947928656',
+        '953748686884716574'
+      ];
+
+      // Verificar se o alvo possui algum cargo protegido
+      const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
+      if (targetMember && targetMember.roles.cache.some(role => protectedRoles.includes(role.id))) {
+        // Apenas apagar o comando sem responder
+        await message.delete().catch(() => {});
+        return;
+      }
+
+      const member = await message.guild.members.fetch(targetId);
+
+      await registerModerationAction('kick', targetId, message.author.id, reason, true);
+
+      try {
+        await member.kick(reason);
+      } catch (kickError) {
+        await pgClient.query(
+          'DELETE FROM moderation_actions WHERE action_type = $1 AND target_user_id = $2 AND moderator_id = $3 AND executed_at > NOW() - INTERVAL \'5 seconds\'',
+          ['kick', targetId, message.author.id]
+        );
+        throw kickError;
+      }
+
+      const kickEmbed = new EmbedBuilder()
+        .setTitle('USUÁRIO EXPULSO')
+        .setDescription('Ação de expulsão executada com sucesso')
+        .setColor('#ffaa00')
+        .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+        .addFields(
+          { name: 'Usuário', value: `${member.user.tag}`, inline: true },
+          { name: 'ID', value: `${targetId}`, inline: true },
+          { name: 'Moderador', value: `${message.author.tag}`, inline: false },
+          { name: 'Motivo', value: reason, inline: false },
+          { name: 'Data e Hora', value: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }), inline: false }
+        )
+        .setFooter({ text: `Expulso por ${message.author.username}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+        .setTimestamp();
+
+      await message.reply({ embeds: [kickEmbed] });
+
+    } catch (error) {
+      console.error('Erro ao expulsar:', error);
+      await message.reply('❌ Erro ao expulsar o usuário. Verifique o ID e tente novamente.');
+    }
+  }
+
+  // Comando !mban - Banimento múltiplo
+  if (message.content.startsWith('!mban')) {
+    const allowedRoles = ['1274085555872731178', '1362914546372837627'];
+    const hasPermission = message.member.roles.cache.some(role => allowedRoles.includes(role.id));
+
+    if (!hasPermission) {
+      return message.reply('❌ Você não tem permissão para usar este comando.');
+    }
+
+    const args = message.content.slice(5).trim();
+
+    if (!args) {
+      return message.reply('❌ Uso correto: `!mban [ID1,ID2,ID3,...]` ou `!mban [@user1,@user2,...]`\n**Exemplo:** `!mban 123456789,987654321` ou `!mban @user1,@user2`');
+    }
+
+    // Separar IDs por vírgula, limpar espaços e extrair IDs de menções
+    const userIds = args.split(',').map(id => {
+      const cleaned = id.trim().replace(/[<@!>]/g, ''); // Remove caracteres de menção
+      return cleaned;
+    }).filter(id => id.length > 0);
+
+    if (userIds.length === 0) {
+      return message.reply('❌ Nenhum ID válido fornecido.');
+    }
+
+    // Verificar se os IDs são válidos
+    const invalidIds = userIds.filter(id => !/^\d{17,19}$/.test(id));
+    if (invalidIds.length > 0) {
+      return message.reply(`❌ IDs inválidos encontrados: ${invalidIds.join(', ')}\n\nCertifique-se de que todos os IDs são numéricos.`);
+    }
+
+    // Lista de cargos protegidos
+    const protectedRoles = [
+      '1385756391284805713',
+      '1065441743379628043',
+      '1428102553224220844',
+      '1065441744726020126',
+      '1386493660010516693',
+      '1317652394351525959',
+      '1399068298741551194',
+      '1386492093303885907',
+      '1065441745875243008',
+      '1065441747305508916',
+      '1285648807501238344',
+      '1065441748446359584',
+      '1399068247646797955',
+      '1065441749947928656',
+      '953748686884716574'
+    ];
+
+    // Verificar se algum usuário possui algum cargo protegido
+    const protectedUsers = [];
+
+    for (const userId of userIds) {
+      try {
+        const targetMember = await message.guild.members.fetch(userId).catch(() => null);
+        if (targetMember && targetMember.roles.cache.some(role => protectedRoles.includes(role.id))) {
+          protectedUsers.push(userId);
+        }
+      } catch (error) {
+        // Ignorar erros de fetch para continuar verificando outros usuários
+      }
+    }
+
+    if (protectedUsers.length > 0) {
+      // Deletar comando silenciosamente
+      await message.delete().catch(() => {});
       return;
     }
 
-    // Buscar informações sobre o banimento
+    // Pedir motivo
+    const motivoMsg = await message.reply(`📋 **Banimento Múltiplo Iniciado**\n\n**Total de usuários:** ${userIds.length}\n**IDs:** ${userIds.join(', ')}\n\n⚠️ **Digite o motivo do banimento:**`);
+
+    // Criar coletor de mensagens para capturar o motivo
+    const filter = m => m.author.id === message.author.id;
+    const collector = message.channel.createMessageCollector({ filter, max: 1, time: 60000 });
+
+    collector.on('collect', async motivoMessage => {
+      const motivo = motivoMessage.content;
+
+      // Apagar mensagens do staff e do bot
+      try {
+        await message.delete().catch(() => {});
+        await motivoMsg.delete().catch(() => {});
+        await motivoMessage.delete().catch(() => {});
+      } catch (error) {
+        console.error('Erro ao deletar mensagens:', error);
+      }
+
+      // Processar banimentos
+      const logChannelId = '1426978891603640360';
+      const logChannel = client.channels.cache.get(logChannelId);
+
+      let bannedCount = 0;
+      let failedCount = 0;
+      const bannedUsers = [];
+      const failedUsers = [];
+
+      for (const userId of userIds) {
+        try {
+          // Buscar informações do usuário
+          const targetUser = await client.users.fetch(userId).catch(() => null);
+
+          if (!targetUser) {
+            failedUsers.push({ id: userId, error: 'Usuário não encontrado' });
+            failedCount++;
+            continue;
+          }
+
+          // Registrar ação de moderação
+          await registerModerationAction('ban', userId, message.author.id, motivo, true);
+
+          // Banir usuário
+          await message.guild.members.ban(userId, { reason: motivo });
+          bannedCount++;
+          bannedUsers.push(targetUser);
+
+          // Enviar log individual para cada banimento
+          if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle('🔨 BANIMENTO MÚLTIPLO')
+              .setDescription(`
+**Usuário Banido:** ${targetUser.tag} (${userId})
+**Motivo:** ${motivo}
+**Moderador:** ${message.author.tag} (${message.author.id})
+**Data:** ${new Date().toLocaleString('pt-BR')}
+`)
+              .setColor('#ff0000')
+              .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: `Banimento ${bannedCount}/${userIds.length}` })
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+
+          // Delay entre banimentos para evitar rate limit
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+        } catch (error) {
+          console.error(`Erro ao banir ${userId}:`, error);
+          failedUsers.push({ id: userId, error: error.message });
+          failedCount++;
+        }
+      }
+
+      // Enviar confirmação final
+      const confirmationEmbed = new EmbedBuilder()
+        .setTitle(' BANIMENTO MÚLTIPLO CONCLUÍDO')
+        .setDescription(`
+** ESTATÍSTICAS:**
+
+ **Banidos com sucesso:** ${bannedCount}
+ **Falharam:** ${failedCount}
+ **Total processado:** ${userIds.length}
+
+**Motivo aplicado:** ${motivo}
+**Executado por:** ${message.author.tag}
+`)
+        .setColor(failedCount === 0 ? '#000001' : '#000001')
+        .setTimestamp();
+
+      if (bannedUsers.length > 0) {
+        const bannedList = bannedUsers.slice(0, 10).map(u => `• ${u.tag} (${u.id})`).join('\n');
+        confirmationEmbed.addFields({
+          name: ' Usuários Banidos',
+          value: bannedList + (bannedUsers.length > 10 ? `\n*... e mais ${bannedUsers.length - 10} usuários*` : ''),
+          inline: false
+        });
+      }
+
+      if (failedUsers.length > 0) {
+        const failedList = failedUsers.slice(0, 5).map(f => `• ${f.id} - ${f.error}`).join('\n');
+        confirmationEmbed.addFields({
+          name: ' Falhas',
+          value: failedList + (failedUsers.length > 5 ? `\n*... e mais ${failedUsers.length - 5} falhas*` : ''),
+          inline: false
+        });
+      }
+
+      await message.channel.send({ embeds: [confirmationEmbed] });
+    });
+
+    collector.on('end', collected => {
+      if (collected.size === 0) {
+        motivoMsg.edit('❌ **Tempo esgotado!** O banimento múltiplo foi cancelado por falta de resposta.').catch(() => {});
+      }
+    });
+  }
+});
+
+client.on('guildBanAdd', async ban => {
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     const bannedUser = ban.user;
     const guild = ban.guild;
+    const warningChannelId = '1340686466556235867'; // Canal de punição manual
+    const warningChannel = client.channels.cache.get(warningChannelId);
+    const exemptRoleId = '1274085555872731178'; // Cargo que pode usar ban manual
 
-    // Buscar logs de auditoria para encontrar quem executou o ban
     let executor = null;
     let reason = 'Não especificado';
 
     try {
       const auditLogs = await guild.fetchAuditLogs({
-        type: 22, // MEMBER_BAN_ADD
+        type: 22,
         limit: 1
       });
 
@@ -4614,44 +6967,141 @@ client.on('guildBanAdd', async ban => {
       console.error('Erro ao buscar logs de auditoria:', auditError);
     }
 
-    // Criar embed do log de banimento
-    const banLogEmbed = new EmbedBuilder()
-      .setTitle('🔨 **USUÁRIO BANIDO**')
-      .setDescription(`
-**Usuário banido:** ${bannedUser.tag} (${bannedUser.id})
-**Executado por:** ${executor ? `${executor.tag} (${executor.id})` : 'Sistema/Desconhecido'}
-**Servidor:** ${guild.name}
+    if (!executor || executor.bot) {
+      return;
+    }
 
-**Motivo:**
-\`\`\`
-${reason}
-\`\`\`
+    const recentCommand = await checkRecentModerationCommand('ban', bannedUser.id);
 
-**Data do banimento:** ${new Date().toLocaleString('pt-BR')}
-`)
-      .setColor('#ff4444')
-      .setThumbnail(bannedUser.displayAvatarURL({ dynamic: true }))
-      .addFields(
-        { 
-          name: '👤 **Informações do Usuário**', 
-          value: `**Tag:** ${bannedUser.tag}\n**ID:** ${bannedUser.id}\n**Conta criada:** ${bannedUser.createdAt.toLocaleDateString('pt-BR')}`, 
-          inline: true 
-        },
-        { 
-          name: '⚖️ **Informações da Ação**', 
-          value: `**Staff:** ${executor ? executor.tag : 'Desconhecido'}\n**Método:** Ban direto\n**Servidor:** ${guild.name}`, 
-          inline: true 
+    if (!recentCommand) {
+      const member = await guild.members.fetch(executor.id).catch(() => null);
+
+      // Verificar se o executor tem o cargo de exceção
+      if (member && member.roles.cache.has(exemptRoleId)) {
+        console.log(`Ban manual por ${executor.tag} permitido (possui cargo de exceção)`);
+        return;
+      }
+
+      if (member) {
+        const banPermissionRoles = member.roles.cache.filter(role => 
+          role.permissions.has('BanMembers')
+        );
+
+        for (const [roleId, role] of banPermissionRoles) {
+          try {
+            await member.roles.remove(role);
+            console.log(`Cargo ${role.name} removido de ${executor.tag} por ban manual`);
+          } catch (err) {
+            console.error(`Erro ao remover cargo ${role.name}:`, err);
+          }
         }
-      )
-      .setFooter({ text: 'SISTEMA DE LOGS DE BANIMENTO' })
-      .setTimestamp();
+      }
 
-    await logChannel.send({ embeds: [banLogEmbed] });
+      if (warningChannel) {
+        const warningEmbed = new EmbedBuilder()
+          .setTitle('⚠️ PUNIÇÃO MANUAL DETECTADA')
+          .setDescription(`O staff **${executor.tag}** usou punição manual e recebeu uma advertência.`)
+          .addFields(
+            { name: 'Staff', value: `${executor.tag} (${executor.id})`, inline: true },
+            { name: 'Tipo', value: 'Ban Manual', inline: true },
+            { name: 'Usuário Banido', value: `${bannedUser.tag} (${bannedUser.id})`, inline: false },
+            { name: 'Motivo do Ban', value: reason, inline: false },
+            { name: 'Ação Tomada', value: 'Cargos com permissão de ban removidos', inline: false }
+          )
+          .setColor('#ff0000')
+          .setTimestamp();
 
-    console.log(`Log de banimento enviado: ${bannedUser.tag} banido por ${executor ? executor.tag : 'Desconhecido'}`);
+        await warningChannel.send({ embeds: [warningEmbed] });
+      }
+    }
 
   } catch (error) {
-    console.error('Erro ao enviar log de banimento:', error);
+    console.error('Erro ao processar ban:', error);
+  }
+});
+
+client.on('guildMemberRemove', async member => {
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    const guild = member.guild;
+    const warningChannelId = '1340686466556235867'; // Canal de punição manual
+    const warningChannel = client.channels.cache.get(warningChannelId);
+    const exemptRoleId = '1274085555872731178'; // Cargo que pode usar kick manual
+
+    let executor = null;
+    let reason = 'Não especificado';
+    let wasKicked = false;
+
+    try {
+      const auditLogs = await guild.fetchAuditLogs({
+        type: 20,
+        limit: 1
+      });
+
+      const kickLog = auditLogs.entries.first();
+      if (kickLog && kickLog.target.id === member.id) {
+        const timeDiff = Date.now() - kickLog.createdTimestamp;
+        if (timeDiff < 5000) {
+          wasKicked = true;
+          executor = kickLog.executor;
+          reason = kickLog.reason || 'Não especificado';
+        }
+      }
+    } catch (auditError) {
+      console.error('Erro ao buscar logs de auditoria de kick:', auditError);
+    }
+
+    if (!wasKicked || !executor || executor.bot) {
+      return;
+    }
+
+    const recentCommand = await checkRecentModerationCommand('kick', member.id);
+
+    if (!recentCommand) {
+      const executorMember = await guild.members.fetch(executor.id).catch(() => null);
+
+      // Verificar se o executor tem o cargo de exceção
+      if (executorMember && executorMember.roles.cache.has(exemptRoleId)) {
+        console.log(`Kick manual por ${executor.tag} permitido (possui cargo de exceção)`);
+        return;
+      }
+
+      if (executorMember) {
+        const kickPermissionRoles = executorMember.roles.cache.filter(role => 
+          role.permissions.has('KickMembers')
+        );
+
+        for (const [roleId, role] of kickPermissionRoles) {
+          try {
+            await executorMember.roles.remove(role);
+            console.log(`Cargo ${role.name} removido de ${executor.tag} por kick manual`);
+          } catch (err) {
+            console.error(`Erro ao remover cargo ${role.name}:`, err);
+          }
+        }
+      }
+
+      if (warningChannel) {
+        const warningEmbed = new EmbedBuilder()
+          .setTitle('⚠️ PUNIÇÃO MANUAL DETECTADA')
+          .setDescription(`O staff **${executor.tag}** usou punição manual e recebeu uma advertência.`)
+          .addFields(
+            { name: 'Staff', value: `${executor.tag} (${executor.id})`, inline: true },
+            { name: 'Tipo', value: 'Kick Manual', inline: true },
+            { name: 'Usuário Expulso', value: `${member.user.tag} (${member.id})`, inline: false },
+            { name: 'Motivo do Kick', value: reason, inline: false },
+            { name: 'Ação Tomada', value: 'Cargos com permissão de kick removidos', inline: false }
+          )
+          .setColor('#ff9900')
+          .setTimestamp();
+
+        await warningChannel.send({ embeds: [warningEmbed] });
+      }
+    }
+
+  } catch (error) {
+    console.error('Erro ao processar remoção de membro:', error);
   }
 });
 
@@ -4669,20 +7119,395 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
+  // Handler para confirmação de deletar todas threads
+  if (interaction.isButton() && interaction.customId.startsWith('confirm_delete_threads_')) {
+    const parts = interaction.customId.split('_');
+    const channelId = parts[3];
+    const authorId = parts[4];
+
+    // Verificar se quem clicou foi quem executou o comando
+    if (interaction.user.id !== authorId) {
+      return interaction.reply({
+        content: '❌ Apenas quem executou o comando pode confirmar esta ação.',
+        flags: 1 << 6
+      });
+    }
+
+    await interaction.deferUpdate();
+
+    const targetChannel = client.channels.cache.get(channelId);
+
+    if (!targetChannel) {
+      return interaction.editReply({
+        content: '❌ Canal não encontrado.',
+        embeds: [],
+        components: []
+      });
+    }
+
+    const loadingEmbed = new EmbedBuilder()
+      .setTitle('🔄 **DELETANDO THREADS**')
+      .setDescription(`
+**Canal:** ${targetChannel}
+**Status:** Processando...
+
+> ⏳ *Aguarde enquanto deletamos todas as threads...*
+`)
+      .setColor('#ffaa00')
+      .setTimestamp();
+
+    await interaction.editReply({
+      embeds: [loadingEmbed],
+      components: []
+    });
+
+    try {
+      // Buscar todas as threads (ativas e arquivadas)
+      const activeThreads = await targetChannel.threads.fetchActive();
+      const archivedThreads = await targetChannel.threads.fetchArchived();
+
+      const allThreads = new Map([...activeThreads.threads, ...archivedThreads.threads]);
+
+      let deletedCount = 0;
+      let failedCount = 0;
+      const deletedDetails = [];
+      const failedDetails = [];
+
+      for (const [threadId, thread] of allThreads) {
+        try {
+          await thread.delete();
+          deletedCount++;
+          deletedDetails.push({
+            name: thread.name,
+            id: threadId,
+            status: 'Deletada'
+          });
+
+          // Delay entre deleções para evitar rate limit
+          await new Promise(resolve => setTimeout(resolve, 300));
+
+        } catch (error) {
+          console.error(`Erro ao deletar thread ${threadId}:`, error);
+          failedCount++;
+          failedDetails.push({
+            name: thread.name || 'Thread desconhecida',
+            id: threadId,
+            error: error.message
+          });
+        }
+      }
+
+      // Criar relatório
+      let detailsText = '';
+      if (deletedDetails.length > 0) {
+        const sampleDeleted = deletedDetails.slice(0, 15);
+        detailsText += '### ✅ **THREADS DELETADAS:**\n';
+        detailsText += sampleDeleted.map(t => `• **${t.name}** (${t.id})`).join('\n');
+        if (deletedDetails.length > 15) {
+          detailsText += `\n*... e mais ${deletedDetails.length - 15} thread(s)*`;
+        }
+      }
+
+      if (failedDetails.length > 0) {
+        detailsText += '\n\n### ❌ **FALHAS:**\n';
+        const sampleFailed = failedDetails.slice(0, 5);
+        detailsText += sampleFailed.map(t => `• **${t.name}** - ${t.error}`).join('\n');
+        if (failedDetails.length > 5) {
+          detailsText += `\n*... e mais ${failedDetails.length - 5} falha(s)*`;
+        }
+      }
+
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('🗑️ **DELEÇÃO CONCLUÍDA**')
+        .setDescription(`
+**Canal processado:** ${targetChannel}
+**Executado por:** ${interaction.user}
+
+## 📊 **ESTATÍSTICAS:**
+
+\`\`\`yaml
+✅ Deletadas: ${deletedCount}
+❌ Falhas: ${failedCount}
+📊 Total: ${allThreads.size}
+\`\`\`
+
+${detailsText}
+
+**Data:** ${new Date().toLocaleString('pt-BR')}
+`)
+        .setColor(failedCount === 0 ? '#00ff88' : '#ffaa00')
+        .addFields(
+          { 
+            name: '✅ **Sucesso**', 
+            value: `${deletedCount} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '❌ **Falhas**', 
+            value: `${failedCount} thread(s)`, 
+            inline: true 
+          },
+          { 
+            name: '📊 **Total**', 
+            value: `${allThreads.size} thread(s)`, 
+            inline: true 
+          }
+        )
+        .setFooter({ 
+          text: 'SISTEMA DE DELEÇÃO DE THREADS',
+          iconURL: interaction.guild.iconURL({ dynamic: true, size: 64 })
+        })
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [resultEmbed] });
+
+    } catch (error) {
+      console.error('Erro ao processar deleção de threads:', error);
+
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ **ERRO NO PROCESSAMENTO**')
+        .setDescription(`
+**Erro ao deletar threads do canal**
+
+\`\`\`
+${error.message}
+\`\`\`
+
+> ⚠️ *Verifique se o bot tem as permissões necessárias no canal*
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [errorEmbed] });
+    }
+    return;
+  }
+
+  // Handler para cancelar deleção de threads
+  if (interaction.isButton() && interaction.customId === 'cancel_delete_threads') {
+    const cancelEmbed = new EmbedBuilder()
+      .setTitle('❌ **OPERAÇÃO CANCELADA**')
+      .setDescription('A deleção de threads foi cancelada.')
+      .setColor('#888888')
+      .setTimestamp();
+
+    await interaction.update({
+      embeds: [cancelEmbed],
+      components: []
+    });
+    return;
+  }
+
+  // Handler para confirmar limpeza de palavras-chave
+  if (interaction.isButton() && interaction.customId.startsWith('config_clear_confirm_')) {
+    const authorId = interaction.customId.replace('config_clear_confirm_', '');
+
+    if (interaction.user.id !== authorId) {
+      return interaction.reply({
+        content: '❌ Apenas quem executou o comando pode confirmar esta ação.',
+        flags: 1 << 6
+      });
+    }
+
+    await interaction.deferUpdate();
+
+    try {
+      const keywords = await getBlockedKeywords();
+      const totalRemoved = keywords.length;
+
+      // Remover todas as palavras
+      for (const keyword of keywords) {
+        await removeBlockedKeyword(keyword);
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('🗑️ LIMPEZA CONCLUÍDA')
+        .setDescription(`
+## ✅ **TODAS AS PALAVRAS FORAM REMOVIDAS:**
+
+• **Total removido:** ${totalRemoved} palavra(s)
+• **Executado por:** ${interaction.user}
+• **Data:** ${new Date().toLocaleString('pt-BR')}
+
+## 📊 **SISTEMA ATUALIZADO:**
+
+• **Palavras bloqueadas:** 0
+• **Status:** 🟡 Sem palavras configuradas
+
+> ⚠️ *O sistema OCR continua ativo, mas não há palavras para detectar.*
+> *Use \`!config add <palavra>\` para adicionar novas palavras.*
+`)
+        .setColor('#00ff88')
+        .setFooter({ text: 'SISTEMA OCR GIFZADA • Limpeza Concluída' })
+        .setTimestamp();
+
+      await interaction.editReply({
+        embeds: [successEmbed],
+        components: []
+      });
+
+    } catch (error) {
+      console.error('Erro ao limpar palavras-chave:', error);
+
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ ERRO NA LIMPEZA')
+        .setDescription(`
+Ocorreu um erro ao remover as palavras-chave.
+
+\`\`\`
+${error.message}
+\`\`\`
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      await interaction.editReply({
+        embeds: [errorEmbed],
+        components: []
+      });
+    }
+    return;
+  }
+
+  // Handler para cancelar limpeza de palavras-chave OCR
+  if (interaction.isButton() && interaction.customId === 'config_clear_cancel') {
+    const cancelEmbed = new EmbedBuilder()
+      .setTitle('❌ OPERAÇÃO CANCELADA')
+      .setDescription('A limpeza de palavras-chave OCR foi cancelada.')
+      .setColor('#888888')
+      .setTimestamp();
+
+    await interaction.update({
+      embeds: [cancelEmbed],
+      components: []
+    });
+    return;
+  }
+
+  // Handler para confirmar limpeza de palavras suspeitas
+  if (interaction.isButton() && interaction.customId.startsWith('config_suspicious_clear_confirm_')) {
+    const authorId = interaction.customId.replace('config_suspicious_clear_confirm_', '');
+
+    if (interaction.user.id !== authorId) {
+      return interaction.reply({
+        content: '❌ Apenas quem executou o comando pode confirmar esta ação.',
+        flags: 1 << 6
+      });
+    }
+
+    await interaction.deferUpdate();
+
+    try {
+      const keywords = await getSuspiciousKeywords();
+      const totalRemoved = keywords.length;
+
+      for (const keyword of keywords) {
+        await removeSuspiciousKeyword(keyword);
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('🗑️ LIMPEZA CONCLUÍDA - SUSPICIOUS')
+        .setDescription(`
+## ✅ **TODAS AS PALAVRAS SUSPEITAS FORAM REMOVIDAS:**
+
+• **Total removido:** ${totalRemoved} palavra(s)
+• **Executado por:** ${interaction.user}
+• **Data:** ${new Date().toLocaleString('pt-BR')}
+
+## 📊 **SISTEMA ATUALIZADO:**
+
+• **Palavras suspeitas:** 0
+• **Status:** 🟡 Sem palavras configuradas
+
+> ⚠️ *O sistema anti-spam continua ativo, mas não há palavras para detectar.*
+> *Use \`!config suspicious add <palavra>\` para adicionar novas palavras.*
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: 'Sistema Anti-Spam GIFZADA • Limpeza Concluída' })
+        .setTimestamp();
+
+      await interaction.editReply({
+        embeds: [successEmbed],
+        components: []
+      });
+
+    } catch (error) {
+      console.error('Erro ao limpar palavras suspeitas:', error);
+
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ ERRO NA LIMPEZA')
+        .setDescription(`
+Ocorreu um erro ao remover as palavras suspeitas.
+
+\`\`\`
+${error.message}
+\`\`\`
+`)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      await interaction.editReply({
+        embeds: [errorEmbed],
+        components: []
+      });
+    }
+    return;
+  }
+
+  // Handler para cancelar limpeza de palavras suspeitas
+  if (interaction.isButton() && interaction.customId === 'config_suspicious_clear_cancel') {
+    const cancelEmbed = new EmbedBuilder()
+      .setTitle('❌ OPERAÇÃO CANCELADA')
+      .setDescription('A limpeza de palavras suspeitas foi cancelada.')
+      .setColor('#888888')
+      .setTimestamp();
+
+    await interaction.update({
+      embeds: [cancelEmbed],
+      components: []
+    });
+    return;
+  }
+
+    // Handler para botão de Halloween
+  if (interaction.isButton() && interaction.customId === 'halloween_role_toggle') {
+    try {
+      const halloweenRoleId = '1428894013418901616';
+      const member = interaction.member;
+
+      if (member.roles.cache.has(halloweenRoleId)) {
+        await member.roles.remove(halloweenRoleId);
+        await interaction.reply({
+          content: 'Você removeu o cargo de Halloween!',
+          flags: 1 << 6
+        });
+      } else {
+        await member.roles.add(halloweenRoleId);
+        await interaction.reply({
+          content: 'Você ganhou o cargo de Halloween! Divirta-se!',
+          flags: 1 << 6
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao alternar cargo de Halloween:', error);
+      await interaction.reply({
+        content: '❌ Erro ao processar o cargo. Tente novamente mais tarde.',
+        flags: 1 << 6
+      }).catch(() => {});
+    }
+    return;
+  }
+
   // Handler para comandos slash
   if (interaction.isChatInputCommand()) {
     const { commandName, member, channel, options } = interaction;
 
     // IDs dos cargos autorizados para usar os comandos
     const authorizedRoles = [
-      '1065441747305508916',
-      '1065441745875243008',
-      '1386492093303885907',
-      '1317652394351525959',
-      '1386493660010516693',
-      '1065441744726020126',
-      '1065441743379628043',
-      '1065441742301704202'
+      '1274085555872731178',
+      '1352454634425552988',
+      '1362914546372837627',
+      '1362914629805801743',
     ];
 
     // Verificar se o member existe
@@ -5046,18 +7871,630 @@ ${motivo}
         });
       }
     }
+
+    if (commandName === 'painel') {
+      try {
+        const supportRoleId = '1165308513355046973';
+        const entertainmentRoleId = '1399191631231713452';
+
+        const hasSupportRole = member.roles.cache.has(supportRoleId);
+        const hasEntertainmentRole = member.roles.cache.has(entertainmentRoleId);
+
+        if (!hasSupportRole && !hasEntertainmentRole) {
+          return interaction.reply({
+            content: '❌ Você não tem permissão para acessar nenhum painel administrativo.',
+            flags: 1 << 6
+          });
+        }
+
+        if (hasSupportRole) {
+          const supportEmbed = new EmbedBuilder()
+            .setTitle('🎫 Painel Administrativo — Suporte')
+            .setDescription(`
+**Bem-vindo ao Painel de Controle de Suporte!**
+
+Gerencie a equipe de suporte, monitore o desempenho e controle os atendimentos da área.
+
+> Use os botões abaixo para acessar as funcionalidades do painel.
+            `)
+            .setColor('#9c41ff')
+            .setTimestamp()
+            .setFooter({ text: `Painel acessado por ${interaction.user.username}` });
+
+          const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('support_tickets_open')
+              .setLabel('Tickets em aberto')
+              .setEmoji('🎫')
+              .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+              .setCustomId('support_tickets_history')
+              .setLabel('Histórico de tickets')
+              .setEmoji('🧾')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+          const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('support_team_performance')
+              .setLabel('Desempenho da equipe')
+              .setEmoji('📊')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('support_ticket_status')
+              .setLabel('Definir status do ticket')
+              .setEmoji('⚙️')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+          const row3 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('support_update_schedule')
+              .setLabel('Atualizar escalas')
+              .setEmoji('🔄')
+              .setStyle(ButtonStyle.Success)
+          );
+
+          await interaction.reply({
+            embeds: [supportEmbed],
+            components: [row1, row2, row3],
+            flags: 1 << 6
+          });
+        } else if (hasEntertainmentRole) {
+          const entertainmentEmbed = new EmbedBuilder()
+            .setTitle('🎉 Painel Administrativo — Entretenimento')
+            .setDescription(`
+**Bem-vindo ao Painel de Controle de Entretenimento!**
+
+Gerencie eventos, enquetes, equipe criativa e o calendário da área de entretenimento.
+
+> Use os botões abaixo para acessar as funcionalidades do painel.
+            `)
+            .setColor('#ffaa00')
+            .setTimestamp()
+            .setFooter({ text: `Painel acessado por ${interaction.user.username}` });
+
+          const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('entertainment_new_event')
+              .setLabel('Novo evento')
+              .setEmoji('📅')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId('entertainment_create_poll')
+              .setLabel('Criar enquete')
+              .setEmoji('🗳️')
+              .setStyle(ButtonStyle.Primary)
+          );
+
+          const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('entertainment_scheduled_events')
+              .setLabel('Ver eventos agendados')
+              .setEmoji('🧾')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('entertainment_team')
+              .setLabel('Equipe de entretenimento')
+              .setEmoji('🧑‍🤝‍🧑')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+          const row3 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('entertainment_statistics')
+              .setLabel('Estatísticas da área')
+              .setEmoji('📊')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('entertainment_send_notice')
+              .setLabel('Enviar aviso para equipe')
+              .setEmoji('📢')
+              .setStyle(ButtonStyle.Primary)
+          );
+
+          const row4 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId('entertainment_ideas_bank')
+              .setLabel('Banco de ideias')
+              .setEmoji('🧠')
+              .setStyle(ButtonStyle.Success)
+          );
+
+          await interaction.reply({
+            embeds: [entertainmentEmbed],
+            components: [row1, row2, row3, row4],
+            flags: 1 << 6
+          });
+        }
+      } catch (error) {
+        console.error('Erro no comando /painel:', error);
+        await interaction.reply({
+          content: '❌ Erro ao abrir o painel. Tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
     return;
+  }
+
+  // HANDLERS DOS BOTÕES DO PAINEL DE SUPORTE
+  if (interaction.isButton() && interaction.customId === 'support_tickets_open') {
+    try {
+      const result = await pgClient.query(`
+        SELECT * FROM support_tickets 
+        WHERE status = 'aberto' AND (closed_at IS NULL)
+        ORDER BY created_at DESC 
+        LIMIT 20
+      `);
+
+      if (result.rows.length === 0) {
+        const noTicketsEmbed = new EmbedBuilder()
+          .setTitle('🎫 Tickets em Aberto')
+          .setDescription('Não há tickets de suporte em aberto no momento.')
+          .setColor('#9c41ff')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [noTicketsEmbed], flags: 1 << 6 });
+      }
+
+      let ticketsList = '';
+      for (const ticket of result.rows) {
+        const createdDate = new Date(ticket.created_at).toLocaleString('pt-BR');
+        const staffAssigned = ticket.staff_id ? `<@${ticket.staff_id}>` : 'Não atribuído';
+        ticketsList += `\n**ID:** \`${ticket.ticket_id}\`\n**Thread:** <#${ticket.thread_id}>\n**Usuário:** <@${ticket.user_id}>\n**Staff:** ${staffAssigned}\n**Status:** ${ticket.status}\n**Criado em:** ${createdDate}\n────────────────\n`;
+      }
+
+      const ticketsEmbed = new EmbedBuilder()
+        .setTitle('🎫 Tickets em Aberto')
+        .setDescription(`**Total de tickets abertos:** ${result.rows.length}\n\n${ticketsList}`)
+        .setColor('#9c41ff')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [ticketsEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar tickets abertos:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar tickets. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'support_tickets_history') {
+    try {
+      // Debug: verificar todos os tickets
+      const debugResult = await pgClient.query(`
+        SELECT ticket_id, status, closed_at, thread_id 
+        FROM support_tickets 
+        ORDER BY created_at DESC 
+        LIMIT 5
+      `);
+      console.log('🔍 DEBUG - Últimos 5 tickets no banco:');
+      debugResult.rows.forEach(t => {
+        console.log(`   Ticket: ${t.ticket_id}, Status: ${t.status}, Closed: ${t.closed_at}, Thread: ${t.thread_id}`);
+      });
+
+      const result = await pgClient.query(`
+        SELECT * FROM support_tickets 
+        WHERE status = 'resolvido' AND closed_at IS NOT NULL
+        ORDER BY closed_at DESC 
+        LIMIT 15
+      `);
+
+      console.log(`📊 Tickets resolvidos encontrados: ${result.rows.length}`);
+
+      if (result.rows.length === 0) {
+        const noHistoryEmbed = new EmbedBuilder()
+          .setTitle('🧾 Histórico de Tickets Fechados')
+          .setDescription('Não há tickets fechados no histórico.')
+          .setColor('#9c41ff')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [noHistoryEmbed], flags: 1 << 6 });
+      }
+
+      let historyList = '';
+      for (const ticket of result.rows) {
+        const closedDate = ticket.closed_at ? new Date(ticket.closed_at).toLocaleString('pt-BR') : 'N/A';
+        const resolvedBy = ticket.resolved_by ? `<@${ticket.resolved_by}>` : 'Sistema';
+        historyList += `\n**ID:** \`${ticket.ticket_id}\`\n**Thread:** <#${ticket.thread_id}>\n**Status:** ${ticket.status}\n**Resolvido por:** ${resolvedBy}\n**Fechado em:** ${closedDate}\n────────────────\n`;
+      }
+
+      const historyEmbed = new EmbedBuilder()
+        .setTitle('🧾 Histórico de Tickets Fechados')
+        .setDescription(`**Últimos tickets fechados:** ${result.rows.length}\n\n${historyList}`)
+        .setColor('#9c41ff')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [historyEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar histórico de tickets:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar histórico. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'support_team_performance') {
+    try {
+      const result = await pgClient.query(`
+        SELECT 
+          staff_id,
+          COUNT(*) as tickets_resolvidos,
+          AVG(EXTRACT(EPOCH FROM (closed_at - created_at))/3600) as tempo_medio_horas
+        FROM support_tickets 
+        WHERE staff_id IS NOT NULL 
+          AND closed_at IS NOT NULL
+        GROUP BY staff_id
+        ORDER BY tickets_resolvidos DESC
+        LIMIT 10
+      `);
+
+      if (result.rows.length === 0) {
+        const noPerformanceEmbed = new EmbedBuilder()
+          .setTitle('📊 Desempenho da Equipe de Suporte')
+          .setDescription('Não há dados de desempenho disponíveis no momento.')
+          .setColor('#9c41ff')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [noPerformanceEmbed], flags: 1 << 6 });
+      }
+
+      let performanceList = '';
+      let position = 1;
+      for (const staff of result.rows) {
+        const tempoMedio = staff.tempo_medio_horas ? parseFloat(staff.tempo_medio_horas).toFixed(2) : 'N/A';
+        performanceList += `\n**${position}º lugar**\n**Staff:** <@${staff.staff_id}>\n**Tickets resolvidos:** ${staff.tickets_resolvidos}\n**Tempo médio:** ${tempoMedio}h\n────────────────\n`;
+        position++;
+      }
+
+      const performanceEmbed = new EmbedBuilder()
+        .setTitle('📊 Desempenho da Equipe de Suporte')
+        .setDescription(`**Top ${result.rows.length} membros da equipe:**\n\n${performanceList}`)
+        .setColor('#9c41ff')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [performanceEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar desempenho da equipe:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar desempenho. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'support_ticket_status') {
+    const modal = new ModalBuilder()
+      .setCustomId('support_status_modal')
+      .setTitle('Definir Status do Ticket');
+
+    const threadIdInput = new TextInputBuilder()
+      .setCustomId('thread_id_input')
+      .setLabel('ID da Thread do Ticket')
+      .setPlaceholder('Cole o ID da thread aqui')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const statusInput = new TextInputBuilder()
+      .setCustomId('status_input')
+      .setLabel('Novo Status')
+      .setPlaceholder('em análise / resolvido / encaminhado')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const row1 = new ActionRowBuilder().addComponents(threadIdInput);
+    const row2 = new ActionRowBuilder().addComponents(statusInput);
+
+    modal.addComponents(row1, row2);
+    await interaction.showModal(modal);
+  }
+
+  if (interaction.isButton() && interaction.customId === 'support_update_schedule') {
+    const modal = new ModalBuilder()
+      .setCustomId('support_schedule_modal')
+      .setTitle('Atualizar Escalas de Plantão');
+
+    const staffIdInput = new TextInputBuilder()
+      .setCustomId('staff_id_input')
+      .setLabel('ID do Staff')
+      .setPlaceholder('ID do membro da equipe')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const staffNameInput = new TextInputBuilder()
+      .setCustomId('staff_name_input')
+      .setLabel('Nome do Staff')
+      .setPlaceholder('Nome do membro')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const dayInput = new TextInputBuilder()
+      .setCustomId('day_input')
+      .setLabel('Dia da Semana (0-6, 0=Domingo)')
+      .setPlaceholder('0 para Domingo, 1 para Segunda, etc.')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const timeInput = new TextInputBuilder()
+      .setCustomId('time_input')
+      .setLabel('Horário (início-fim)')
+      .setPlaceholder('14:00-22:00')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(staffIdInput),
+      new ActionRowBuilder().addComponents(staffNameInput),
+      new ActionRowBuilder().addComponents(dayInput),
+      new ActionRowBuilder().addComponents(timeInput)
+    );
+
+    await interaction.showModal(modal);
+  }
+
+  // HANDLERS DOS BOTÕES DO PAINEL DE ENTRETENIMENTO
+  if (interaction.isButton() && interaction.customId === 'entertainment_new_event') {
+    const modal = new ModalBuilder()
+      .setCustomId('entertainment_event_modal')
+      .setTitle('Criar Novo Evento');
+
+    const titleInput = new TextInputBuilder()
+      .setCustomId('event_title_input')
+      .setLabel('Título do Evento')
+      .setPlaceholder('Ex: Noite de Jogos')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const dateInput = new TextInputBuilder()
+      .setCustomId('event_date_input')
+      .setLabel('Data do Evento (DD/MM/YYYY HH:MM)')
+      .setPlaceholder('Ex: 25/12/2025 20:00')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const responsibleInput = new TextInputBuilder()
+      .setCustomId('event_responsible_input')
+      .setLabel('ID do Responsável')
+      .setPlaceholder('ID do usuário responsável')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const descInput = new TextInputBuilder()
+      .setCustomId('event_desc_input')
+      .setLabel('Descrição do Evento')
+      .setPlaceholder('Descreva o evento...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(titleInput),
+      new ActionRowBuilder().addComponents(dateInput),
+      new ActionRowBuilder().addComponents(responsibleInput),
+      new ActionRowBuilder().addComponents(descInput)
+    );
+
+    await interaction.showModal(modal);
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_create_poll') {
+    const modal = new ModalBuilder()
+      .setCustomId('entertainment_poll_modal')
+      .setTitle('Criar Nova Enquete');
+
+    const questionInput = new TextInputBuilder()
+      .setCustomId('poll_question_input')
+      .setLabel('Pergunta da Enquete')
+      .setPlaceholder('Ex: Qual evento vocês preferem?')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const optionsInput = new TextInputBuilder()
+      .setCustomId('poll_options_input')
+      .setLabel('Opções (separe por vírgula)')
+      .setPlaceholder('Opção 1, Opção 2, Opção 3, ...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(questionInput),
+      new ActionRowBuilder().addComponents(optionsInput)
+    );
+
+    await interaction.showModal(modal);
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_scheduled_events') {
+    try {
+      const result = await pgClient.query(`
+        SELECT * FROM entertainment_events 
+        WHERE status = 'agendado' 
+        ORDER BY event_date ASC 
+        LIMIT 10
+      `);
+
+      if (result.rows.length === 0) {
+        const noEventsEmbed = new EmbedBuilder()
+          .setTitle('🧾 Eventos Agendados')
+          .setDescription('Não há eventos agendados no momento.')
+          .setColor('#ffaa00')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [noEventsEmbed], flags: 1 << 6 });
+      }
+
+      let eventsList = '';
+      for (const event of result.rows) {
+        const eventDate = new Date(event.event_date).toLocaleString('pt-BR');
+        eventsList += `\n**${event.title}**\n**Data:** ${eventDate}\n**Responsável:** <@${event.responsible_id}>\n**Status:** ${event.status}\n────────────────\n`;
+      }
+
+      const eventsEmbed = new EmbedBuilder()
+        .setTitle('🧾 Eventos Agendados')
+        .setDescription(`**Total de eventos:** ${result.rows.length}\n\n${eventsList}`)
+        .setColor('#ffaa00')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [eventsEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar eventos agendados:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar eventos. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_team') {
+    try {
+      const result = await pgClient.query(`
+        SELECT * FROM entertainment_team 
+        ORDER BY status, events_organized DESC
+      `);
+
+      if (result.rows.length === 0) {
+        const noTeamEmbed = new EmbedBuilder()
+          .setTitle('🧑‍🤝‍🧑 Equipe de Entretenimento')
+          .setDescription('Não há membros cadastrados na equipe.')
+          .setColor('#ffaa00')
+          .setTimestamp();
+
+        return interaction.reply({ embeds: [noTeamEmbed], flags: 1 << 6 });
+      }
+
+      let teamList = '';
+      for (const member of result.rows) {
+        const statusEmoji = member.status === 'ativo' ? '🟢' : '🔴';
+        teamList += `\n${statusEmoji} **<@${member.user_id}>** (${member.username})\n**Status:** ${member.status}\n**Eventos organizados:** ${member.events_organized}\n────────────────\n`;
+      }
+
+      const teamEmbed = new EmbedBuilder()
+        .setTitle('🧑‍🤝‍🧑 Equipe de Entretenimento')
+        .setDescription(`**Total de membros:** ${result.rows.length}\n\n${teamList}`)
+        .setColor('#ffaa00')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [teamEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar equipe de entretenimento:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar equipe. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_statistics') {
+    try {
+      const eventsResult = await pgClient.query(`
+        SELECT 
+          COUNT(*) FILTER (WHERE status = 'agendado') as agendados,
+          COUNT(*) FILTER (WHERE status = 'concluido') as concluidos,
+          SUM(participants_count) FILTER (WHERE status = 'concluido') as total_participantes
+        FROM entertainment_events
+      `);
+
+      const pollsResult = await pgClient.query(`
+        SELECT COUNT(*) as total_enquetes
+        FROM entertainment_polls
+      `);
+
+      const stats = eventsResult.rows[0];
+      const totalPolls = pollsResult.rows[0].total_enquetes;
+
+      const statsEmbed = new EmbedBuilder()
+        .setTitle('📊 Estatísticas da Área de Entretenimento')
+        .setDescription(`
+**Eventos:**
+• Agendados: ${stats.agendados || 0}
+• Concluídos: ${stats.concluidos || 0}
+• Total de participantes: ${stats.total_participantes || 0}
+
+**Enquetes:**
+• Total criadas: ${totalPolls || 0}
+
+**Engajamento:**
+• Média de participantes por evento: ${stats.concluidos > 0 ? Math.round(stats.total_participantes / stats.concluidos) : 0}
+        `)
+        .setColor('#ffaa00')
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [statsEmbed], flags: 1 << 6 });
+    } catch (error) {
+      console.error('Erro ao buscar estatísticas:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar estatísticas. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_send_notice') {
+    const modal = new ModalBuilder()
+      .setCustomId('entertainment_notice_modal')
+      .setTitle('Enviar Aviso para Equipe');
+
+    const messageInput = new TextInputBuilder()
+      .setCustomId('notice_message_input')
+      .setLabel('Mensagem')
+      .setPlaceholder('Digite o aviso para a equipe...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
+    await interaction.showModal(modal);
+  }
+
+  if (interaction.isButton() && interaction.customId === 'entertainment_ideas_bank') {
+    const channelId = '1428872624771174430';
+    const channel = client.channels.cache.get(channelId);
+
+    if (!channel) {
+      return interaction.reply({
+        content: '❌ Canal de ideias não encontrado.',
+        flags: 1 << 6
+      });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId('entertainment_idea_modal')
+      .setTitle('Adicionar Ideia de Evento');
+
+    const titleInput = new TextInputBuilder()
+      .setCustomId('idea_title_input')
+      .setLabel('Título da Ideia')
+      .setPlaceholder('Ex: Torneio de Among Us')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const descInput = new TextInputBuilder()
+      .setCustomId('idea_desc_input')
+      .setLabel('Descrição da Ideia')
+      .setPlaceholder('Descreva a ideia...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(titleInput),
+      new ActionRowBuilder().addComponents(descInput)
+    );
+
+    await interaction.showModal(modal);
   }
 
   if (interaction.isModalSubmit()) {
     // Handler para modal de Seja Maker
     if (interaction.customId === 'seja_maker_modal') {
+      // Defer reply imediatamente para evitar timeout
+      await interaction.deferReply({ flags: 1 << 6 });
+
       // Verificar se usuário está na blacklist
       const blacklistCheck = await isUserBlacklisted(interaction.user.id);
       if (blacklistCheck) {
-        return interaction.reply({
-          content: `**Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-         flags: 1 << 6
+        return interaction.editReply({
+          content: `**Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`
         });
       }
 
@@ -5066,9 +8503,8 @@ ${motivo}
       if (activeThread) {
         const threadChannel = client.channels.cache.get(activeThread.thread_id);
         if (threadChannel && !threadChannel.archived) {
-          return interaction.reply({
-            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-           flags: 1 << 6
+          return interaction.editReply({
+            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -5077,8 +8513,8 @@ ${motivo}
       }
       const nome = interaction.fields.getTextInputValue('nome');
       const idade = interaction.fields.getTextInputValue('idade');
-      const foiMaker = interaction.fields.getTextInputValue('foi_maker');
-      const objetivo = interaction.fields.getTextInputValue('objetivo');
+      const areaDesejada = interaction.fields.getTextInputValue('area_desejada');
+      const multiplasAreas = interaction.fields.getTextInputValue('multiplas_areas');
 
       const starterMessage = await interaction.channel.send({
         content: '‎',
@@ -5094,21 +8530,21 @@ ${motivo}
       starterMessage.delete().catch(() => {});
 
       const makerEmbed = new EmbedBuilder()
-.setTitle('<:1266777381188931726:1266777381188931726> | JUNTE-SE À STAFF')
+.setTitle('<:d_tag:1366581862004166656> | JUNTE-SE À STAFF')
 .setDescription(`
-<:1266748851050774540:1266748851050774540> | Como staff, sua principal responsabilidade é garantir que o servidor funcione de forma organizada, acolhedora e ativa para todos os membros!
+<:d_dot43:1366581992413728830> | Como staff, sua principal responsabilidade é garantir que o servidor funcione de forma organizada, acolhedora e ativa para todos os membros!
 
-<:1269198470309220385:1269198470309220385> Sua missão é colaborar com a equipe, ajudar nas demandas da comunidade e contribuir para o crescimento do servidor com dedicação e comprometimento.
+<:d_dot43:1366581992413728830> Sua missão é colaborar com a equipe, ajudar nas demandas da comunidade e contribuir para o crescimento do servidor com dedicação e comprometimento.
 
 
-**Nome:**
+**Qual o seu nome?**
 ${nome}
-**Idade:**
+**Qual a sua idade?**
 ${idade}
-**Já foi maker de outro servidor de GIFS?**
-${foiMaker}
-**Objetivo a alcançar:**
-${objetivo}
+**Qual área deseja entrar?**
+${areaDesejada}
+**Deseja ser de várias áreas ao mesmo tempo? Se sim, qual.**
+${multiplasAreas}
 
 Caso nossa equipe de recrutamento esteja demorando para te atender, chame um staff!
 `)
@@ -5119,16 +8555,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       const makerButtonsRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('assumir_ticket_maker')
-          .setLabel('Assumir')
+          .setLabel('Assumir ticket')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId('chame_staff_maker')
-          .setLabel('Chame um Staff')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('fechar_ticket_maker')
-          .setLabel('Fechar Ticket')
-          .setStyle(ButtonStyle.Danger)
+          .setCustomId('config_ticket_maker')
+          .setLabel('Configurações')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       await thread.send({ 
@@ -5140,20 +8572,21 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       // Registrar thread ativa
       await addActiveThread(interaction.user.id, thread.id, 'Recrutamento - Maker');
 
-      await interaction.reply({ 
-        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-       flags: 1 << 6 
+      await interaction.editReply({ 
+        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`
       });
     }
 
     // Handler para modal de Seja Postador
     if (interaction.customId === 'seja_postador_modal') {
+      // Defer reply imediatamente para evitar timeout
+      await interaction.deferReply({ flags: 1 << 6 });
+
       // Verificar se usuário está na blacklist
       const blacklistCheck = await isUserBlacklisted(interaction.user.id);
       if (blacklistCheck) {
-        return interaction.reply({
-          content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-         flags: 1 << 6
+        return interaction.editReply({
+          content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`
         });
       }
 
@@ -5162,9 +8595,8 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       if (activeThread) {
         const threadChannel = client.channels.cache.get(activeThread.thread_id);
         if (threadChannel && !threadChannel.archived) {
-          return interaction.reply({
-            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-           flags: 1 << 6
+          return interaction.editReply({
+            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -5213,16 +8645,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       const postadorButtonsRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('assumir_ticket_postador')
-          .setLabel('Assumir Ticket')
+          .setLabel('Assumir ticket')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId('chame_staff_postador')
-          .setLabel('Chame um Staff')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('fechar_ticket_postador')
-          .setLabel('Fechar Ticket')
-          .setStyle(ButtonStyle.Danger)
+          .setCustomId('config_ticket_postador')
+          .setLabel('Configurações')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       await thread.send({ 
@@ -5234,22 +8662,23 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       // Registrar thread ativa
       await addActiveThread(interaction.user.id, thread.id, 'Recrutamento - Postador');
 
-      await interaction.reply({ 
-        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-       flags: 1 << 6 
+      await interaction.editReply({ 
+        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`
       });
     }
 
     // Handler para modal de Ajuda
     if (interaction.customId === 'ajuda_modal') {
+      // Defer reply imediatamente para evitar timeout
+      await interaction.deferReply({ flags: 1 << 6 });
+
       // Verificar se já tem thread ativa (qualquer tipo)
       const activeThread = await hasActiveThread(interaction.user.id);
       if (activeThread) {
         const threadChannel = client.channels.cache.get(activeThread.thread_id);
         if (threadChannel && !threadChannel.archived) {
-          return interaction.reply({
-            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-           flags: 1 << 6
+          return interaction.editReply({
+            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -5294,16 +8723,19 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       const ajudaButtonsRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('assumir_ticket_ajuda')
-          .setLabel('Assumir')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId('chame_staff_ajuda')
-          .setLabel('Chame um Staff')
+          .setLabel('Assumir Suporte')
+        .setEmoji('<:support:1429548600320327822>')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('fechar_ticket_ajuda')
-          .setLabel('Fechar Ticket')
-          .setStyle(ButtonStyle.Danger)
+          .setLabel('Finalizar Suporte')
+        .setEmoji('<:close:1429549203561906267>')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('config_ticket_ajuda')
+          .setLabel('Configurações')
+          .setEmoji('<:settings:1429546819477573845>')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       await thread.send({ 
@@ -5315,22 +8747,30 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       // Registrar thread ativa
       await addActiveThread(interaction.user.id, thread.id, 'Suporte - Ajuda');
 
-      await interaction.reply({ 
-        content: `**Seu ticket de suporte foi aberto com sucesso!** ${thread}`, 
-       flags: 1 << 6 
+      // Registrar ticket na tabela support_tickets
+      const ticketId = `ticket_ajuda_${Date.now()}_${interaction.user.id}`;
+      await pgClient.query(`
+        INSERT INTO support_tickets (ticket_id, thread_id, user_id, status, title)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [ticketId, thread.id, interaction.user.id, 'aberto', assunto]);
+
+      await interaction.editReply({ 
+        content: `**Seu ticket de suporte foi aberto com sucesso!** ${thread}`
       });
     }
 
     // Handler para modal de Denúncia
     if (interaction.customId === 'denuncia_modal') {
+      // Defer reply imediatamente para evitar timeout
+      await interaction.deferReply({ flags: 1 << 6 });
+
       // Verificar se já tem thread ativa (qualquer tipo)
       const activeThread = await hasActiveThread(interaction.user.id);
       if (activeThread) {
         const threadChannel = client.channels.cache.get(activeThread.thread_id);
         if (threadChannel && !threadChannel.archived) {
-          return interaction.reply({
-            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-           flags: 1 << 6
+          return interaction.editReply({
+            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -5375,16 +8815,17 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       const denunciaButtonsRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('assumir_ticket_denuncia')
-          .setLabel('Assumir Ticket')
+          .setLabel('Assumir Suporte')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId('chame_staff_denuncia')
-          .setLabel('Chame um Staff')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
           .setCustomId('fechar_ticket_denuncia')
-          .setLabel('Fechar Ticket')
-          .setStyle(ButtonStyle.Danger)
+          .setLabel('Encerrar Suporte')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('config_ticket_denuncia')
+          .setLabel('Configurações')
+          .setEmoji('<:gearw:1429544965926817983>')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       await thread.send({ 
@@ -5396,20 +8837,28 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       // Registrar thread ativa
       await addActiveThread(interaction.user.id, thread.id, 'Suporte - Denúncia');
 
-      await interaction.reply({ 
-        content: `**Seu ticket de denúncia foi aberto com sucesso!** ${thread}`, 
-       flags: 1 << 6 
+      // Registrar ticket na tabela support_tickets
+      const ticketId = `ticket_denuncia_${Date.now()}_${interaction.user.id}`;
+      await pgClient.query(`
+        INSERT INTO support_tickets (ticket_id, thread_id, user_id, status, title)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [ticketId, thread.id, interaction.user.id, 'aberto', assunto]);
+
+      await interaction.editReply({ 
+        content: `**Seu ticket de denúncia foi aberto com sucesso!** ${thread}`
       });
     }
 
     // Handler para modal de Migração
     if (interaction.customId === 'migracao_modal') {
+      // Defer reply imediatamente para evitar timeout
+      await interaction.deferReply({ flags: 1 << 6 });
+
       // Verificar se usuário está na blacklist
       const blacklistCheck = await isUserBlacklisted(interaction.user.id);
       if (blacklistCheck) {
-        return interaction.reply({
-          content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`,
-         flags: 1 << 6
+        return interaction.editReply({
+          content: `🚫 **Você está na blacklist de recrutamento**\n\n**Motivo:** ${blacklistCheck.reason}\n\nEntre em contato com a equipe de recrutamento para mais informações.`
         });
       }
 
@@ -5418,9 +8867,8 @@ Caso nossa equipe de suporte esteja demorando para te atender, chame um staff!
       if (activeThread) {
         const threadChannel = client.channels.cache.get(activeThread.thread_id);
         if (threadChannel && !threadChannel.archived) {
-          return interaction.reply({
-            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`,
-           flags: 1 << 6
+          return interaction.editReply({
+            content: `❌ **Você já possui um ticket ativo!**\n\nTipo: ${activeThread.thread_type}\nThread: ${threadChannel}\n\nFinalize ou feche seu ticket atual antes de abrir outro.`
           });
         } else {
           // Thread não existe mais, remover do banco
@@ -5469,16 +8917,12 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       const migracaoButtonsRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('assumir_ticket_migracao')
-          .setLabel('Assumir Ticket')
+          .setLabel('Assumir ticket')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId('chame_staff_migracao')
-          .setLabel('Chame um Staff')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('fechar_ticket_migracao')
-          .setLabel('Fechar Ticket')
-          .setStyle(ButtonStyle.Danger)
+          .setCustomId('config_ticket_migracao')
+          .setLabel('Configurações')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       await thread.send({ 
@@ -5490,10 +8934,328 @@ Caso nossa equipe de recrutamento esteja demorando para te atender, chame um sta
       // Registrar thread ativa
       await addActiveThread(interaction.user.id, thread.id, 'Recrutamento - Migração');
 
-      await interaction.reply({ 
-        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`, 
-       flags: 1 << 6 
+      await interaction.editReply({ 
+        content: `**Seu ticket de recrutamento foi aberto com sucesso!** ${thread}`
       });
+    }
+
+    // HANDLERS DOS MODAIS DO PAINEL DE SUPORTE
+    if (interaction.customId === 'support_status_modal') {
+      const threadId = interaction.fields.getTextInputValue('thread_id_input');
+      const newStatus = interaction.fields.getTextInputValue('status_input').toLowerCase();
+
+      try {
+        const result = await pgClient.query(
+          'SELECT * FROM support_tickets WHERE thread_id = $1',
+          [threadId]
+        );
+
+        if (result.rows.length === 0) {
+          return interaction.reply({
+            content: '❌ Ticket não encontrado para esta thread.',
+            flags: 1 << 6
+          });
+        }
+
+        const thread = client.channels.cache.get(threadId);
+        if (!thread) {
+          return interaction.reply({
+            content: '❌ Thread não encontrada.',
+            flags: 1 << 6
+          });
+        }
+
+        await pgClient.query(
+          'UPDATE support_tickets SET status = $1 WHERE thread_id = $2',
+          [newStatus, threadId]
+        );
+
+        const currentName = thread.name;
+        const nameParts = currentName.split('・');
+        const baseId = nameParts[nameParts.length - 1];
+
+        const statusPrefixes = {
+          'em análise': '🔍',
+          'resolvido': '✅',
+          'encaminhado': '📨'
+        };
+
+        const prefix = statusPrefixes[newStatus] || '🎫';
+        await thread.setName(`${prefix}・${baseId}・${newStatus}`);
+
+        const statusEmbed = new EmbedBuilder()
+          .setTitle('✅ Status Atualizado')
+          .setDescription(`O status do ticket foi alterado para: **${newStatus}**`)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [statusEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao atualizar status do ticket:', error);
+        await interaction.reply({
+          content: '❌ Erro ao atualizar status. Tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
+
+    if (interaction.customId === 'support_schedule_modal') {
+      const staffId = interaction.fields.getTextInputValue('staff_id_input');
+      const staffName = interaction.fields.getTextInputValue('staff_name_input');
+      const dayOfWeek = parseInt(interaction.fields.getTextInputValue('day_input'));
+      const timeRange = interaction.fields.getTextInputValue('time_input');
+
+      try {
+        if (dayOfWeek < 0 || dayOfWeek > 6) {
+          return interaction.reply({
+            content: '❌ Dia da semana inválido. Use 0-6 (0=Domingo, 6=Sábado).',
+            flags: 1 << 6
+          });
+        }
+
+        const [startTime, endTime] = timeRange.split('-');
+        if (!startTime || !endTime) {
+          return interaction.reply({
+            content: '❌ Formato de horário inválido. Use: HH:MM-HH:MM',
+            flags: 1 << 6
+          });
+        }
+
+        await pgClient.query(`
+          INSERT INTO support_schedule (staff_id, staff_name, day_of_week, start_time, end_time)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [staffId, staffName, dayOfWeek, startTime.trim(), endTime.trim()]);
+
+        const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+        const scheduleEmbed = new EmbedBuilder()
+          .setTitle('✅ Escala Adicionada')
+          .setDescription(`
+**Staff:** <@${staffId}>
+**Dia:** ${days[dayOfWeek]}
+**Horário:** ${startTime} - ${endTime}
+
+A escala foi registrada com sucesso!
+          `)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [scheduleEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao adicionar escala:', error);
+        await interaction.reply({
+          content: '❌ Erro ao adicionar escala. Verifique os dados e tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
+
+    // HANDLERS DOS MODAIS DO PAINEL DE ENTRETENIMENTO
+    if (interaction.customId === 'entertainment_event_modal') {
+      const title = interaction.fields.getTextInputValue('event_title_input');
+      const dateStr = interaction.fields.getTextInputValue('event_date_input');
+      const responsibleId = interaction.fields.getTextInputValue('event_responsible_input');
+      const description = interaction.fields.getTextInputValue('event_desc_input') || 'Sem descrição';
+
+      try {
+        const [datePart, timePart] = dateStr.split(' ');
+        const [day, month, year] = datePart.split('/');
+        const [hours, minutes] = timePart.split(':');
+
+        const eventDate = new Date(year, month - 1, day, hours, minutes);
+
+        if (isNaN(eventDate.getTime())) {
+          return interaction.reply({
+            content: '❌ Data inválida. Use o formato: DD/MM/YYYY HH:MM',
+            flags: 1 << 6
+          });
+        }
+
+        const eventId = `event_${Date.now()}`;
+        const responsible = await interaction.guild.members.fetch(responsibleId);
+
+        await pgClient.query(`
+          INSERT INTO entertainment_events 
+          (event_id, title, event_date, responsible_id, responsible_name, description, created_by)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [eventId, title, eventDate, responsibleId, responsible.user.username, description, interaction.user.id]);
+
+        const eventEmbed = new EmbedBuilder()
+          .setTitle('✅ Evento Criado com Sucesso!')
+          .setDescription(`
+**Título:** ${title}
+**Data:** ${eventDate.toLocaleString('pt-BR')}
+**Responsável:** <@${responsibleId}>
+**Descrição:** ${description}
+
+O bot irá avisar quando a data do evento chegar!
+          `)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [eventEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao criar evento:', error);
+        await interaction.reply({
+          content: '❌ Erro ao criar evento. Verifique os dados e tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
+
+    if (interaction.customId === 'entertainment_poll_modal') {
+      const question = interaction.fields.getTextInputValue('poll_question_input');
+      const optionsStr = interaction.fields.getTextInputValue('poll_options_input');
+
+      try {
+        const options = optionsStr.split(',').map(opt => opt.trim()).filter(opt => opt.length > 0);
+
+        if (options.length < 2) {
+          return interaction.reply({
+            content: '❌ A enquete precisa ter pelo menos 2 opções.',
+            flags: 1 << 6
+          });
+        }
+
+        if (options.length > 10) {
+          return interaction.reply({
+            content: '❌ Máximo de 10 opções por enquete.',
+            flags: 1 << 6
+          });
+        }
+
+        const pollId = `poll_${Date.now()}`;
+        const pollChannel = client.channels.cache.get('1415798672876376154');
+
+        if (!pollChannel) {
+          return interaction.reply({
+            content: '❌ Canal de enquetes não encontrado.',
+            flags: 1 << 6
+          });
+        }
+
+        const pollEmbed = new EmbedBuilder()
+          .setTitle('🗳️ ' + question)
+          .setDescription(options.map((opt, i) => `**${i + 1}.** ${opt}`).join('\n'))
+          .setColor('#ffaa00')
+          .setFooter({ text: `Criado por ${interaction.user.username}` })
+          .setTimestamp();
+
+        const pollMessage = await pollChannel.send({ embeds: [pollEmbed] });
+
+        const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        for (let i = 0; i < options.length; i++) {
+          await pollMessage.react(numberEmojis[i]);
+        }
+
+        await pgClient.query(`
+          INSERT INTO entertainment_polls (poll_id, message_id, question, options, created_by)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [pollId, pollMessage.id, question, JSON.stringify(options), interaction.user.id]);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Enquete Criada!')
+          .setDescription(`A enquete foi publicada em ${pollChannel}`)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [successEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao criar enquete:', error);
+        await interaction.reply({
+          content: '❌ Erro ao criar enquete. Tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
+
+    if (interaction.customId === 'entertainment_notice_modal') {
+      const message = interaction.fields.getTextInputValue('notice_message_input');
+
+      try {
+        const noticeChannel = client.channels.cache.get('1428872375826387105');
+
+        if (!noticeChannel) {
+          return interaction.reply({
+            content: '❌ Canal de avisos não encontrado.',
+            flags: 1 << 6
+          });
+        }
+
+        const noticeEmbed = new EmbedBuilder()
+          .setTitle('📢 Aviso para a Equipe de Entretenimento')
+          .setDescription(message)
+          .setColor('#ffaa00')
+          .setFooter({ text: `Enviado por ${interaction.user.username}` })
+          .setTimestamp();
+
+        await noticeChannel.send({ embeds: [noticeEmbed] });
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Aviso Enviado!')
+          .setDescription(`O aviso foi publicado em ${noticeChannel}`)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [successEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao enviar aviso:', error);
+        await interaction.reply({
+          content: '❌ Erro ao enviar aviso. Tente novamente.',
+          flags: 1 << 6
+        });
+      }
+    }
+
+    if (interaction.customId === 'entertainment_idea_modal') {
+      const title = interaction.fields.getTextInputValue('idea_title_input');
+      const description = interaction.fields.getTextInputValue('idea_desc_input');
+
+      try {
+        const ideaChannel = client.channels.cache.get('1428872624771174430');
+
+        if (!ideaChannel) {
+          return interaction.reply({
+            content: '❌ Canal de ideias não encontrado.',
+            flags: 1 << 6
+          });
+        }
+
+        const ideaId = `idea_${Date.now()}`;
+
+        const ideaThread = await ideaChannel.threads.create({
+          name: `💡 ${title}`,
+          autoArchiveDuration: 10080,
+          reason: 'Nova ideia de evento'
+        });
+
+        const ideaEmbed = new EmbedBuilder()
+          .setTitle('💡 ' + title)
+          .setDescription(description)
+          .setColor('#ffaa00')
+          .setFooter({ text: `Sugerido por ${interaction.user.username}` })
+          .setTimestamp();
+
+        await ideaThread.send({ embeds: [ideaEmbed] });
+
+        await pgClient.query(`
+          INSERT INTO event_ideas (idea_id, title, description, suggested_by, suggested_by_name)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [ideaId, title, description, interaction.user.id, interaction.user.username]);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Ideia Adicionada!')
+          .setDescription(`Sua ideia foi adicionada ao banco de ideias: ${ideaThread}`)
+          .setColor('#00ff00')
+          .setTimestamp();
+
+        await interaction.reply({ embeds: [successEmbed], flags: 1 << 6 });
+      } catch (error) {
+        console.error('Erro ao adicionar ideia:', error);
+        await interaction.reply({
+          content: '❌ Erro ao adicionar ideia. Tente novamente.',
+          flags: 1 << 6
+        });
+      }
     }
 
     // Handler para modal de comentários
@@ -5977,6 +9739,202 @@ ${detailText}
          flags: 1 << 6
         });
       }
+    }
+
+    // Handler para modal de adicionar pessoa ao ticket
+    if (interaction.customId.startsWith('modal_add_person_')) {
+      const threadId = interaction.customId.replace('modal_add_person_', '');
+      const userInput = interaction.fields.getTextInputValue('user_id').trim();
+
+      try {
+        const thread = client.channels.cache.get(threadId);
+        if (!thread || !thread.isThread()) {
+          return interaction.reply({
+            content: '❌ Thread não encontrada.',
+            flags: 1 << 6
+          });
+        }
+
+        const userId = userInput.replace(/[<@!>]/g, '');
+
+        if (!/^\d{17,19}$/.test(userId)) {
+          return interaction.reply({
+            content: `❌ ID inválido. Use um ID numérico válido ou mencione o usuário.\n\n**Exemplo:** \`123456789012345678\` ou \`<@123456789012345678>\``,
+            flags: 1 << 6
+          });
+        }
+
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+
+        if (!member) {
+          return interaction.reply({
+            content: `❌ Usuário não encontrado no servidor.\n\n**ID fornecido:** \`${userId}\`\n\nVerifique se o ID está correto e se o usuário está no servidor.`,
+            flags: 1 << 6
+          });
+        }
+
+        await thread.members.add(member);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ **PESSOA ADICIONADA**')
+          .setDescription(`${member} foi adicionado à thread com sucesso!`)
+          .setColor('#00ff88')
+          .setTimestamp();
+
+        await interaction.reply({
+          embeds: [successEmbed],
+          flags: 1 << 6
+        });
+
+        await thread.send(`📌 ${member} foi adicionado à thread por ${interaction.user}.`);
+
+      } catch (error) {
+        console.error('Erro ao adicionar pessoa:', error);
+        await interaction.reply({
+          content: `❌ Erro ao adicionar pessoa.\n\n**Detalhes:** ${error.message}\n\nVerifique se o ID está correto e se o bot tem permissões para gerenciar a thread.`,
+          flags: 1 << 6
+        });
+      }
+      return;
+    }
+
+    // Handler para modal de remover pessoa do ticket
+    if (interaction.customId.startsWith('modal_remove_person_')) {
+      const threadId = interaction.customId.replace('modal_remove_person_', '');
+      const userInput = interaction.fields.getTextInputValue('user_id').trim();
+
+      try {
+        const thread = client.channels.cache.get(threadId);
+        if (!thread || !thread.isThread()) {
+          return interaction.reply({
+            content: '❌ Thread não encontrada.',
+            flags: 1 << 6
+          });
+        }
+
+        const userId = userInput.replace(/[<@!>]/g, '');
+
+        if (!/^\d{17,19}$/.test(userId)) {
+          return interaction.reply({
+            content: `❌ ID inválido. Use um ID numérico válido ou mencione o usuário.\n\n**Exemplo:** \`123456789012345678\` ou \`<@123456789012345678>\``,
+            flags: 1 << 6
+          });
+        }
+
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+
+        if (!member) {
+          return interaction.reply({
+            content: `❌ Usuário não encontrado no servidor.\n\n**ID fornecido:** \`${userId}\`\n\nVerifique se o ID está correto e se o usuário está no servidor.`,
+            flags: 1 << 6
+          });
+        }
+
+        await thread.members.remove(member);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ **PESSOA REMOVIDA**')
+          .setDescription(`${member} foi removido da thread com sucesso!`)
+          .setColor('#ff4444')
+          .setTimestamp();
+
+        await interaction.reply({
+          embeds: [successEmbed],
+          flags: 1 << 6
+        });
+
+      } catch (error) {
+        console.error('Erro ao remover pessoa:', error);
+        await interaction.reply({
+          content: `❌ Erro ao remover pessoa.\n\n**Detalhes:** ${error.message}\n\nVerifique se o ID está correto e se o bot tem permissões para gerenciar a thread.`,
+          flags: 1 << 6
+        });
+      }
+      return;
+    }
+
+    // Handler para modal de adicionar timer ao ticket
+    if (interaction.customId.startsWith('modal_add_timer_')) {
+      const threadId = interaction.customId.replace('modal_add_timer_', '');
+      const minutesInput = interaction.fields.getTextInputValue('timer_minutes').trim();
+      const minutes = parseInt(minutesInput);
+
+      if (isNaN(minutes) || minutes < 1) {
+        return interaction.reply({
+          content: `❌ Valor inválido.\n\n**Você digitou:** "${minutesInput}"\n\nPor favor, insira um número válido de minutos (mínimo 1).`,
+          flags: 1 << 6
+        });
+      }
+
+      try {
+        const thread = client.channels.cache.get(threadId);
+        if (!thread || !thread.isThread()) {
+          return interaction.reply({
+            content: '❌ Thread não encontrada.',
+            flags: 1 << 6
+          });
+        }
+
+        if (!global.ticketTimers) {
+          global.ticketTimers = new Map();
+        }
+
+        if (global.ticketTimers.has(threadId)) {
+          clearTimeout(global.ticketTimers.get(threadId));
+        }
+
+        const timerId = setTimeout(async () => {
+          try {
+            const timeoutEmbed = new EmbedBuilder()
+              .setTitle('⏱️ **TEMPO ESGOTADO**')
+              .setDescription(`
+O usuário não respondeu dentro de ${minutes} minuto(s).
+
+Thread será fechada e trancada em 5 segundos...
+`)
+              .setColor('#ff4444')
+              .setTimestamp();
+
+            await thread.send({ embeds: [timeoutEmbed] });
+
+            setTimeout(async () => {
+              await thread.setLocked(true);
+              await thread.setArchived(true);
+              global.ticketTimers.delete(threadId);
+            }, 5000);
+
+          } catch (error) {
+            console.error('Erro ao fechar ticket por timeout:', error);
+          }
+        }, minutes * 60 * 1000);
+
+        global.ticketTimers.set(threadId, timerId);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('⏱️ **TIMER CONFIGURADO**')
+          .setDescription(`
+Timer de **${minutes} minuto(s)** foi configurado com sucesso!
+
+Se o usuário não responder dentro deste período, o ticket será fechado automaticamente.
+`)
+          .setColor('#ffaa00')
+          .setTimestamp();
+
+        await interaction.reply({
+          embeds: [successEmbed],
+          flags: 1 << 6
+        });
+
+        await thread.send(`⏱️ Timer de **${minutes} minuto(s)** configurado por ${interaction.user}. O ticket será fechado se não houver resposta.`);
+
+      } catch (error) {
+        console.error('Erro ao configurar timer:', error);
+        await interaction.reply({
+          content: `❌ Erro ao configurar timer.\n\n**Detalhes:** ${error.message}`,
+          flags: 1 << 6
+        });
+      }
+      return;
     }
 
     if (interaction.customId.startsWith('rejeitar_motivo_')) {
@@ -6522,7 +10480,7 @@ Thread será fechada em alguns segundos...
           '1065441770562932777',  // Cargo adicional 3
           '1065441771577937961',  // Cargo adicional 4
         ];
-        
+
         const hasPermission = allowedRoles.some(roleId => member.roles.cache.has(roleId));
 
         if (!hasPermission) {
@@ -6737,7 +10695,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   if (customId.startsWith('otimizar_')) {
     const channelId = customId.split('_')[1];
     const dadosOtimizacao = otimizacaoTentativa.get(channelId);
-    
+
     if (!dadosOtimizacao) {
       return interaction.reply({
         content: '❌ Dados de otimização não encontrados. Tente novamente.',
@@ -6859,7 +10817,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
         content: '❌ Erro durante a otimização. Tente novamente.',
         embeds: []
       });
-      
+
       // Limpar dados
       dadosOtimizacao.temporarios.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
       conversaoEscolha.delete(channelId);
@@ -6871,7 +10829,7 @@ Clique no botão correspondente à cor desejada para aplicá-la ao seu nick!
   if (customId.startsWith('cancelar_otimizacao_')) {
     const channelId = customId.split('_')[2];
     const dadosOtimizacao = otimizacaoTentativa.get(channelId);
-    
+
     if (!dadosOtimizacao) {
       return interaction.reply({
         content: '❌ Dados de otimização não encontrados.',
@@ -7550,11 +11508,11 @@ ${activeWarning.reason}
   if (customId.startsWith('components_v2_')) {
     try {
       await interaction.deferReply({ flags: 1 << 6 });
-      
+
       const action = customId.split('_').slice(2).join('_'); // Remove 'components_v2_'
-      
+
       let responseEmbed;
-      
+
       switch (action) {
         case 'primary':
           responseEmbed = new EmbedBuilder()
@@ -7791,9 +11749,9 @@ Esta é a demonstração dos novos Discord Components V2 usando discord.js v14.
             .setColor('#5865f2')
             .setTimestamp();
       }
-      
+
       await interaction.editReply({ embeds: [responseEmbed] });
-      
+
     } catch (error) {
       console.error('Erro no handler Components V2:', error);
       if (!interaction.replied && !interaction.deferred) {
@@ -7814,7 +11772,7 @@ Esta é a demonstração dos novos Discord Components V2 usando discord.js v14.
   if (interaction.isStringSelectMenu() && customId === 'components_v2_select') {
     try {
       await interaction.deferReply({ flags: 1 << 6 });
-      
+
       const selectedValues = interaction.values;
       const optionNames = {
         'dark_theme': '🌙 Tema Escuro',
@@ -7823,9 +11781,9 @@ Esta é a demonstração dos novos Discord Components V2 usando discord.js v14.
         'compact_mode': '📱 Modo Compacto',
         'animations': '✨ Animações'
       };
-      
+
       const selectedOptions = selectedValues.map(value => optionNames[value] || value);
-      
+
       const selectEmbed = new EmbedBuilder()
         .setTitle('🎨 **CONFIGURAÇÕES DE TEMA APLICADAS**')
         .setDescription(`
@@ -7864,9 +11822,9 @@ ${JSON.stringify(selectedValues, null, 2)}
           }
         )
         .setTimestamp();
-        
+
       await interaction.editReply({ embeds: [selectEmbed] });
-      
+
     } catch (error) {
       console.error('Erro no select menu Components V2:', error);
       await interaction.editReply({
@@ -7874,6 +11832,71 @@ ${JSON.stringify(selectedValues, null, 2)}
       });
     }
     return;
+  }
+
+  // Handler para select menu de líderes
+  if (interaction.isStringSelectMenu() && customId.startsWith('select_leader_')) {
+    const leaderId = interaction.values[0];
+
+    const leaderNames = {
+      '515516634035912724': 'Suporte',
+      '1425508094586126347': 'Entretenimento',
+      '496443909317066763': 'Recrutamento',
+      '944313943906717756': 'Maker / Postador'
+    };
+
+    const leaderName = leaderNames[leaderId] || 'Líder';
+
+    await interaction.channel.send({
+      content: `**LÍDER CHAMADO**\n\n<@${leaderId}> (${leaderName}) foi mencionado neste ticket por ${interaction.user}.`
+    });
+
+    await interaction.reply({
+      content: ` Líder de **${leaderName}** foi chamado com sucesso!`,
+      flags: 1 << 6
+    });
+  }
+
+  // Handler para botões de chamar líder específico
+  if (customId.startsWith('call_leader_suporte_') || customId.startsWith('call_leader_entretenimento_') || 
+      customId.startsWith('call_leader_recrutamento_') || customId.startsWith('call_leader_maker_')) {
+
+    const leaderMap = {
+      'call_leader_suporte_': {
+        id: '515516634035912724',
+        name: 'Suporte'
+      },
+      'call_leader_entretenimento_': {
+        id: '1425508094586126347',
+        name: 'Entretenimento'
+      },
+      'call_leader_recrutamento_': {
+        id: '496443909317066763',
+        name: 'Recrutamento'
+      },
+      'call_leader_maker_': {
+        id: '944313943906717756',
+        name: 'Maker / Postador'
+      }
+    };
+
+    let leaderId, leaderName;
+    for (const [prefix, data] of Object.entries(leaderMap)) {
+      if (customId.startsWith(prefix)) {
+        leaderId = data.id;
+        leaderName = data.name;
+        break;
+      }
+    }
+
+    await interaction.channel.send({
+      content: `📞 **LÍDER CHAMADO**\n\n<@${leaderId}> (${leaderName}) foi mencionado neste ticket por ${interaction.user}.`
+    });
+
+    await interaction.reply({
+      content: `✅ Líder de **${leaderName}** foi chamado com sucesso!`,
+      flags: 1 << 6
+    });
   }
 
   // Handlers para botões de suporte
@@ -7935,32 +11958,32 @@ ${JSON.stringify(selectedValues, null, 2)}
 
     const nomeInput = new TextInputBuilder()
       .setCustomId('nome')
-      .setLabel('Nome')
+      .setLabel('Qual o seu nome?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     const idadeInput = new TextInputBuilder()
       .setCustomId('idade')
-      .setLabel('Idade')
+      .setLabel('Qual a sua idade?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const foiMakerInput = new TextInputBuilder()
-      .setCustomId('foi_maker')
-      .setLabel('Já foi staff de outro servidor?')
+    const areaInput = new TextInputBuilder()
+      .setCustomId('area_desejada')
+      .setLabel('Qual área deseja entrar?')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const objetivoInput = new TextInputBuilder()
-      .setCustomId('objetivo')
-      .setLabel('Objetivo a alcançar:')
+    const multiplasAreasInput = new TextInputBuilder()
+      .setCustomId('multiplas_areas')
+      .setLabel('Deseja ser de várias áreas? Se sim, qual.')
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true);
 
     const row1 = new ActionRowBuilder().addComponents(nomeInput);
     const row2 = new ActionRowBuilder().addComponents(idadeInput);
-    const row3 = new ActionRowBuilder().addComponents(foiMakerInput);
-    const row4 = new ActionRowBuilder().addComponents(objetivoInput);
+    const row3 = new ActionRowBuilder().addComponents(areaInput);
+    const row4 = new ActionRowBuilder().addComponents(multiplasAreasInput);
 
     modal.addComponents(row1, row2, row3, row4);
     await interaction.showModal(modal);
@@ -8049,6 +12072,9 @@ ${JSON.stringify(selectedValues, null, 2)}
   const recruitmentRoleId = '1230677503719374990';
   const staffRoleId = '1094385139976507523';
 
+  // Map para timers de tickets
+  if (!global.ticketTimers) global.ticketTimers = new Map();
+
   // Botões de assumir ticket (com sistema de pontos)
   if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao', 'assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(customId)) {
     // Verificar permissões específicas por tipo de ticket
@@ -8087,21 +12113,23 @@ ${JSON.stringify(selectedValues, null, 2)}
       });
     }
 
-    // Desabilitar o botão "Assumir Ticket"
+    // Para todos os tickets, remover botão "Assumir"
     const buttonRow = interaction.message.components[0];
     if (buttonRow) {
-      const buttons = buttonRow.components.map(button => {
-        const newButton = new ButtonBuilder()
-          .setCustomId(button.customId)
-          .setLabel(button.label)
-          .setStyle(button.style);
+      const buttons = buttonRow.components
+        .filter(button => !['assumir_ticket_ajuda', 'assumir_ticket_denuncia', 'assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao'].includes(button.customId))
+        .map(button => {
+          const builder = new ButtonBuilder()
+            .setCustomId(button.customId)
+            .setLabel(button.label)
+            .setStyle(button.style);
 
-        if (['assumir_ticket_maker', 'assumir_ticket_postador', 'assumir_ticket_migracao', 'assumir_ticket_ajuda', 'assumir_ticket_denuncia'].includes(button.customId)) {
-          newButton.setDisabled(true);
-        }
+          if (button.emoji) {
+            builder.setEmoji(button.emoji);
+          }
 
-        return newButton;
-      });
+          return builder;
+        });
 
       const updatedRow = new ActionRowBuilder().addComponents(buttons);
 
@@ -8177,6 +12205,462 @@ ${JSON.stringify(selectedValues, null, 2)}
     });
   }
 
+  // Handler para configurações de ticket de suporte
+  if (['config_ticket_ajuda', 'config_ticket_denuncia'].includes(customId)) {
+    const supportRoleId = '1165308513355046973';
+    const hasPermission = interaction.member.roles.cache.has(supportRoleId);
+
+    if (!hasPermission) {
+      return interaction.reply({
+        content: '❌ Apenas membros da equipe de suporte podem acessar as configurações.',
+        flags: 1 << 6
+      });
+    }
+
+    const configEmbed = new EmbedBuilder()
+      .setTitle('<:settings:1429546819477573845> **CONFIGURAÇÕES DO TICKET**')
+      .setDescription(`
+**Opções disponíveis para gerenciar este ticket:**
+
+<:adduser:1429546776708513915> **Adicionar Pessoa**
+Adiciona um membro à thread do ticket
+
+<:removeuser:1429546723662893219> **Remover Pessoa**
+Remove um membro da thread do ticket
+
+<:timer:1429547584183206069> **Adicionar Timer**
+Define um temporizador em minutos. Se o usuário não responder, o ticket será fechado automaticamente
+`)
+      .setColor('#9C41FF')
+      .setTimestamp();
+
+    const configButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`add_person_${interaction.channel.id}`)
+        .setLabel('Adicionar Pessoa')
+        .setEmoji('<:adduser:1429546776708513915>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`remove_person_${interaction.channel.id}`)
+        .setLabel('Remover Pessoa')
+        .setEmoji('<:removeuser:1429546723662893219>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`add_timer_${interaction.channel.id}`)
+        .setLabel('Adicionar Timer')
+        .setEmoji('<:timer:1429547584183206069>')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.reply({
+      embeds: [configEmbed],
+      components: [configButtons],
+      flags: 1 << 6
+    });
+  }
+
+  // Handler para configurações de ticket de recrutamento
+  if (['config_ticket_maker', 'config_ticket_postador', 'config_ticket_migracao'].includes(customId)) {
+    const recruitmentRoleId = '1230677503719374990';
+    const hasPermission = interaction.member.roles.cache.has(recruitmentRoleId);
+
+    if (!hasPermission) {
+      return interaction.reply({
+        content: '❌ Apenas membros da equipe de recrutamento podem acessar as configurações.',
+        flags: 1 << 6
+      });
+    }
+
+    const configEmbed = new EmbedBuilder()
+      .setTitle('<:settings:1429546819477573845> **CONFIGURAÇÕES DO TICKET**')
+      .setDescription(`
+**Opções disponíveis para gerenciar este ticket:**
+
+<:adduser:1429546776708513915> **Adicionar Pessoa**
+Adiciona um membro à thread do ticket
+
+<:removeuser:1429546723662893219> **Remover Pessoa**
+Remove um membro da thread do ticket
+
+<:timer:1429547584183206069> **Adicionar Timer**
+Define um temporizador em minutos. Se o usuário não responder, o ticket será fechado automaticamente
+
+<:call:1429618140563771452> **Chamar Líder de Área**
+Menciona o líder da área selecionada
+
+<:close:1429549203561906267> **Encerrar Suporte**
+Fecha o ticket e envia um registro das mensagens
+`)
+      .setColor('#9C41FF')
+      .setTimestamp();
+
+    const configButtons1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`add_person_${interaction.channel.id}`)
+        .setLabel('Adicionar Pessoa')
+        .setEmoji('<:adduser:1429546776708513915>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`remove_person_${interaction.channel.id}`)
+        .setLabel('Remover Pessoa')
+        .setEmoji('<:removeuser:1429546723662893219>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`add_timer_${interaction.channel.id}`)
+        .setLabel('Adicionar Timer')
+        .setEmoji('<:timer:1429547584183206069>')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const configButtons2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`call_leader_${interaction.channel.id}`)
+        .setLabel('Chamar Líder de Área')
+        .setEmoji('<:call:1429618140563771452>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`end_support_${interaction.channel.id}`)
+        .setLabel('Encerrar Suporte')
+        .setEmoji('<:close:1429549203561906267>')
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    await interaction.reply({
+      embeds: [configEmbed],
+      components: [configButtons1, configButtons2],
+      flags: 1 << 6
+    });
+  }
+
+  // Handler para adicionar pessoa ao ticket
+  if (customId.startsWith('add_person_')) {
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_add_person_${interaction.channel.id}`)
+      .setTitle('Adicionar Pessoa ao Ticket');
+
+    const userInput = new TextInputBuilder()
+      .setCustomId('user_id')
+      .setLabel('ID do usuário')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Cole o ID do Discord do usuário')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(userInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Handler para remover pessoa do ticket
+  if (customId.startsWith('remove_person_')) {
+    try {
+      const thread = interaction.channel;
+
+      if (!thread || !thread.isThread()) {
+        return interaction.reply({
+          content: '❌ Este comando só pode ser usado em threads.',
+          flags: 1 << 6
+        });
+      }
+
+      // Buscar todos os membros da thread
+      const members = await thread.members.fetch();
+
+      // Filtrar apenas usuários (não bots)
+      const userMembers = members.filter(member => !member.user.bot && member.user.id !== interaction.user.id);
+
+      if (userMembers.size === 0) {
+        return interaction.reply({
+          content: '❌ Não há usuários para remover desta thread.',
+          flags: 1 << 6
+        });
+      }
+
+      // Criar embed com lista de usuários
+      let description = '**Selecione o usuário que deseja remover:**\n\n';
+      const userArray = Array.from(userMembers.values());
+
+      userArray.forEach((member, index) => {
+        description += `**${index + 1}.** ${member.user} (${member.user.tag})\n`;
+      });
+
+      const removeEmbed = new EmbedBuilder()
+        .setTitle('<:removeuser:1429546723662893219> **REMOVER PESSOA**')
+        .setDescription(description)
+        .setColor('#ff4444')
+        .setTimestamp();
+
+      // Criar botões para cada usuário (máximo 25 botões)
+      const buttons = [];
+      const maxButtons = Math.min(userArray.length, 25);
+
+      for (let i = 0; i < maxButtons; i++) {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`remove_user_${userArray[i].user.id}_${interaction.channel.id}`)
+            .setLabel(`${i + 1}`)
+            .setStyle(ButtonStyle.Danger)
+        );
+      }
+
+      // Organizar botões em rows (máximo 5 botões por row)
+      const rows = [];
+      for (let i = 0; i < buttons.length; i += 5) {
+        const row = new ActionRowBuilder().addComponents(buttons.slice(i, i + 5));
+        rows.push(row);
+      }
+
+      await interaction.reply({
+        embeds: [removeEmbed],
+        components: rows,
+        flags: 1 << 6
+      });
+
+    } catch (error) {
+      console.error('Erro ao mostrar lista de usuários:', error);
+      await interaction.reply({
+        content: '❌ Erro ao buscar usuários da thread.',
+        flags: 1 << 6
+      });
+    }
+  }
+
+  // Handler para remover usuário específico
+  if (customId.startsWith('remove_user_')) {
+    const parts = customId.split('_');
+    const userId = parts[2];
+    const threadId = parts[3];
+
+    try {
+      const thread = client.channels.cache.get(threadId);
+
+      if (!thread || !thread.isThread()) {
+        return interaction.reply({
+          content: '❌ Thread não encontrada.',
+          flags: 1 << 6
+        });
+      }
+
+      const member = await interaction.guild.members.fetch(userId);
+      await thread.members.remove(member);
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle('✅ **PESSOA REMOVIDA**')
+        .setDescription(`${member} foi removido da thread com sucesso!`)
+        .setColor('#00ff88')
+        .setTimestamp();
+
+      await interaction.update({
+        embeds: [successEmbed],
+        components: []
+      });
+
+    } catch (error) {
+      console.error('Erro ao remover pessoa:', error);
+      await interaction.reply({
+        content: `❌ Erro ao remover pessoa. Verifique se o usuário ainda está na thread.`,
+        flags: 1 << 6
+      });
+    }
+  }
+
+  // Handler para adicionar timer ao ticket
+  if (customId.startsWith('add_timer_')) {
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_add_timer_${interaction.channel.id}`)
+      .setTitle('Adicionar Timer ao Ticket');
+
+    const timerInput = new TextInputBuilder()
+      .setCustomId('timer_minutes')
+      .setLabel('Tempo em minutos')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 5, 10, 30')
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(timerInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Handler para chamar líder de área
+  if (customId.startsWith('call_leader_')) {
+    const leaderEmbed = new EmbedBuilder()
+      .setTitle('**CHAMAR LÍDER DE ÁREA**')
+      .setDescription(`
+Selecione o líder de área que deseja mencionar neste ticket:
+
+**Suporte** - <@515516634035912724>
+**Entretenimento** - <@1425508094586126347>
+**Recrutamento** - <@496443909317066763>
+**Maker / Postador** - <@944313943906717756>
+`)
+      .setColor('#FFFFFF')
+      .setTimestamp();
+
+    const leaderButtons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`call_leader_suporte_${interaction.channel.id}`)
+        .setLabel('Suporte')
+        .setEmoji('<:Support:1429601800016887838>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`call_leader_entretenimento_${interaction.channel.id}`)
+        .setLabel('Entretenimento')
+        .setEmoji('<:entretenimento:1429602793248915517>')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`call_leader_recrutamento_${interaction.channel.id}`)
+        .setLabel('Recrutamento')
+        .setEmoji('📋')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`call_leader_maker_${interaction.channel.id}`)
+        .setLabel('Maker / Postador')
+        .setEmoji('<:maker:1429598083901161482>')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await interaction.reply({
+      embeds: [leaderEmbed],
+      components: [leaderButtons],
+      flags: 1 << 6
+    });
+  }
+
+  // Handler para encerrar suporte (tickets de recrutamento)
+  if (customId.startsWith('end_support_')) {
+    const threadId = customId.replace('end_support_', '');
+    const thread = client.channels.cache.get(threadId);
+
+    if (!thread || !thread.isThread()) {
+      return interaction.reply({
+        content: '❌ Thread não encontrada.',
+        flags: 1 << 6
+      });
+    }
+
+    try {
+      // Cancelar timer se existir
+      if (global.ticketTimers && global.ticketTimers.has(threadId)) {
+        clearTimeout(global.ticketTimers.get(threadId));
+        global.ticketTimers.delete(threadId);
+      }
+
+      // Buscar todas as mensagens da thread
+      let allMessages = [];
+      let lastId;
+
+      while (true) {
+        const options = { limit: 100 };
+        if (lastId) {
+          options.before = lastId;
+        }
+
+        const messages = await thread.messages.fetch(options);
+        if (messages.size === 0) break;
+
+        allMessages.push(...messages.values());
+        lastId = messages.last().id;
+
+        if (messages.size < 100) break;
+      }
+
+      // Ordenar mensagens por data
+      allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+      // Criar arquivo de texto com o log
+      let logContent = `═══════════════════════════════════════\n`;
+      logContent += `REGISTRO DE TICKET - GIFZADA\n`;
+      logContent += `═══════════════════════════════════════\n\n`;
+      logContent += `Thread: ${thread.name}\n`;
+      logContent += `ID: ${thread.id}\n`;
+      logContent += `Encerrado em: ${new Date().toLocaleString('pt-BR')}\n`;
+      logContent += `Encerrado por: ${interaction.user.tag} (${interaction.user.id})\n`;
+      logContent += `Total de mensagens: ${allMessages.length}\n\n`;
+      logContent += `═══════════════════════════════════════\n`;
+      logContent += `MENSAGENS\n`;
+      logContent += `═══════════════════════════════════════\n\n`;
+
+      for (const msg of allMessages) {
+        const timestamp = new Date(msg.createdTimestamp).toLocaleString('pt-BR');
+        logContent += `[${timestamp}] ${msg.author.tag}:\n`;
+        if (msg.content) {
+          logContent += `${msg.content}\n`;
+        }
+        if (msg.embeds.length > 0) {
+          logContent += `[Embed: ${msg.embeds[0].title || 'Sem título'}]\n`;
+        }
+        if (msg.attachments.size > 0) {
+          logContent += `[Anexos: ${msg.attachments.map(a => a.name).join(', ')}]\n`;
+        }
+        logContent += `\n`;
+      }
+
+      // Enviar log para o canal
+      const logChannel = client.channels.cache.get('1429610795339350098');
+      if (logChannel) {
+        const buffer = Buffer.from(logContent, 'utf-8');
+        const attachment = new AttachmentBuilder(buffer, { name: `ticket-${thread.id}.txt` });
+
+        const logEmbed = new EmbedBuilder()
+          .setTitle('📝 **REGISTRO DE TICKET ENCERRADO**')
+          .setDescription(`
+**Thread:** ${thread.name}
+**Encerrado por:** ${interaction.user}
+**Data:** ${new Date().toLocaleString('pt-BR')}
+**Total de mensagens:** ${allMessages.length}
+`)
+          .setColor('#ff4444')
+          .setTimestamp();
+
+        await logChannel.send({ embeds: [logEmbed], files: [attachment] });
+      }
+
+      // Mensagem de confirmação
+      const closeEmbed = new EmbedBuilder()
+        .setTitle('🔒 **SUPORTE ENCERRADO**')
+        .setDescription(`
+Este ticket foi encerrado por ${interaction.user}.
+
+**Status:** Finalizado
+**Encerrado em:** ${new Date().toLocaleString('pt-BR')}
+
+Um registro das mensagens foi enviado para a equipe.
+Thread será trancada e arquivada em 5 segundos...
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: 'GIFZADA RECRUTAMENTO • Ticket Encerrado' })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [closeEmbed] });
+
+      // Remover thread ativa do banco
+      const threadName = thread.name;
+      const userIdMatch = threadName.match(/(\d+)/);
+      if (userIdMatch) {
+        await removeActiveThread(userIdMatch[1]);
+      }
+
+      // Fechar e trancar thread
+      setTimeout(async () => {
+        try {
+          await thread.setLocked(true);
+          await thread.setArchived(true);
+        } catch (error) {
+          console.error('Erro ao fechar ticket:', error);
+        }
+      }, 5000);
+
+    } catch (error) {
+      console.error('Erro ao encerrar suporte:', error);
+      await interaction.reply({
+        content: '❌ Erro ao encerrar suporte. Tente novamente.',
+        flags: 1 << 6
+      });
+    }
+  }
+
   // Botões de fechar ticket
   if (['fechar_ticket_maker', 'fechar_ticket_postador', 'fechar_ticket_migracao', 'fechar_ticket_ajuda', 'fechar_ticket_denuncia'].includes(customId)) {
     // Verificar permissões específicas por tipo de ticket
@@ -8199,6 +12683,42 @@ ${JSON.stringify(selectedValues, null, 2)}
         content: errorMessage,
        flags: 1 << 6
       });
+    }
+
+    // Para tickets de suporte/denúncia, fechar imediatamente em 5 segundos
+    if (['fechar_ticket_ajuda', 'fechar_ticket_denuncia'].includes(customId)) {
+      // Cancelar timer se existir
+      if (global.ticketTimers && global.ticketTimers.has(interaction.channel.id)) {
+        clearTimeout(global.ticketTimers.get(interaction.channel.id));
+        global.ticketTimers.delete(interaction.channel.id);
+      }
+
+      const closeEmbed = new EmbedBuilder()
+        .setTitle('🔒 **SUPORTE ENCERRADO**')
+        .setDescription(`
+Este ticket de suporte foi encerrado por ${interaction.user}.
+
+**Status:** Finalizado
+**Encerrado em:** ${new Date().toLocaleString('pt-BR')}
+
+Thread será trancada e arquivada em 5 segundos...
+`)
+        .setColor('#ff4444')
+        .setFooter({ text: 'GIFZADA SUPORTE • Ticket Encerrado' })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [closeEmbed] });
+
+      setTimeout(async () => {
+        try {
+          await interaction.channel.setLocked(true);
+          await interaction.channel.setArchived(true);
+        } catch (error) {
+          console.error('Erro ao fechar ticket de suporte:', error);
+        }
+      }, 5000);
+
+      return;
     }
 
     // Verificar se há assignment para este ticket
@@ -8499,7 +13019,7 @@ Em caso de dúvidas ou demora, mencione um dos responsáveis no chat geral ou ag
       if (threadName.includes('Conversão -') || conversaoEscolha.has(interaction.channel.id)) {
         // Limpar timer de inatividade
         clearInactivityTimer(interaction.channel.id);
-        
+
         // Iniciar sistema de feedback para o conversor
         await startConversorFeedbackSystem(interaction, interaction.user.id);
         return;
@@ -11008,6 +15528,31 @@ Selecione uma área para acessar suas funções específicas:
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.channel.isThread()) return;
 
+  // Verificar e cancelar timer de ticket se o DONO do ticket responder
+  if (global.ticketTimers && global.ticketTimers.has(message.channel.id)) {
+    // Extrair ID do usuário do nome da thread (formatos: 📃・USER_ID, 📷・USER_ID, ✈️・USER_ID, 🆘・USER_ID, etc)
+    const threadName = message.channel.name;
+    const userIdMatch = threadName.match(/(\d+)/);
+
+    if (userIdMatch) {
+      const ticketOwnerId = userIdMatch[1];
+
+      // Cancelar timer apenas se quem respondeu foi o dono do ticket
+      if (message.author.id === ticketOwnerId) {
+        clearTimeout(global.ticketTimers.get(message.channel.id));
+        global.ticketTimers.delete(message.channel.id);
+
+        const cancelEmbed = new EmbedBuilder()
+          .setTitle('✅ **TIMER CANCELADO**')
+          .setDescription(`O timer foi cancelado porque ${message.author} respondeu no ticket.`)
+          .setColor('#00ff88')
+          .setTimestamp();
+
+        await message.channel.send({ embeds: [cancelEmbed] });
+      }
+    }
+  }
+
   const tipoData = conversaoEscolha.get(message.channel.id);
 
   // Se for uma thread de conversor, resetar timer de inatividade
@@ -11107,7 +15652,7 @@ ${formatosTexto}
       },
       user: message.author
     };
-    
+
     await createBannerCropSession(interactionObject, file);
     conversaoEscolha.delete(message.channel.id);
     return;
@@ -11226,7 +15771,7 @@ ${formatosTexto}
     if (fileSizeMB > maxOutputSize) {
       // Verificar se já tentou otimização
       const jaTentouOtimizacao = otimizacaoTentativa.has(message.channel.id);
-      
+
       if (jaTentouOtimizacao) {
         // Se já tentou otimização, apenas mostrar erro final
         await aguardandoMsg.edit({
@@ -11448,7 +15993,7 @@ async function processFile(attachment, type, extraData = null) {
 
       // Verificar se é modo otimizado
       const isOptimized = extraData && extraData.otimizado;
-      
+
       // Configurações baseadas no modo
       const scale = isOptimized ? '320:-1' : '420:-1'; // Menor resolução se otimizado
       const fps = isOptimized ? '10' : '15'; // Menor FPS se otimizado
@@ -11506,13 +16051,13 @@ async function processFile(attachment, type, extraData = null) {
 
       // Verificar se é modo otimizado
       const isOptimized = extraData && extraData.otimizado;
-      
+
       // Calcular escala baseada na porcentagem e modo
       let optimizationPercentage = (extraData && extraData.percentage) || 70;
       if (isOptimized) {
         optimizationPercentage = Math.max(optimizationPercentage, 85); // Mínimo 85% de redução se otimizado
       }
-      
+
       const scale = (100 - optimizationPercentage) / 100;
       const lossyValue = Math.min(optimizationPercentage * (isOptimized ? 3 : 2), 200); // Mais lossy se otimizado
       const colorsValue = Math.max(256 - (optimizationPercentage * (isOptimized ? 3 : 2)), 16); // Menos cores se otimizado
@@ -11579,7 +16124,7 @@ async function processFile(attachment, type, extraData = null) {
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      
+
       // Verificar se é uma imagem
       if (!attachment.contentType?.startsWith('image/')) {
         throw new Error('Por favor, envie apenas arquivos de imagem!');
@@ -11601,7 +16146,7 @@ async function processFile(attachment, type, extraData = null) {
 
       // Iniciar sessão interativa de banner crop
       const sessionResult = await createBannerCropSession(interactionObject, attachment);
-      
+
       // Retornar indicador de que deve usar sistema interativo
       return { 
         interactive: true,
@@ -11736,20 +16281,20 @@ async function processFile(attachment, type, extraData = null) {
 
       // Obter cores mais representativas
       const representativeColors = [];
-      
+
       // Adicionar a cor dominante do Sharp primeiro
       representativeColors.push({ r: dominant.r, g: dominant.g, b: dominant.b });
-      
+
       // Adicionar cores mais comuns, evitando cores muito similares
       for (const color of filteredColors) {
         if (representativeColors.length >= 5) break;
-        
+
         // Verificar se a cor é suficientemente diferente das já adicionadas
         const isDifferent = representativeColors.every(existing => {
           const diff = Math.abs(existing.r - color.r) + Math.abs(existing.g - color.g) + Math.abs(existing.b - color.b);
           return diff > 50; // Diferença mínima de 50 pontos RGB
         });
-        
+
         if (isDifferent) {
           representativeColors.push({ r: color.r, g: color.g, b: color.b });
         }
@@ -11816,7 +16361,7 @@ async function processFile(attachment, type, extraData = null) {
       colors.forEach((color, index) => {
         const x = index * colorWidth;
         const hex = colorInfo[index].hex;
-        
+
         // Desenhar retângulo da cor
         paletteCtx.fillStyle = hex;
         paletteCtx.fillRect(x, 0, colorWidth, paletteHeight);
@@ -12271,7 +16816,7 @@ async function processPhotosToGif(message, images, frameDuration) {
     const imageBuffers = [];
     for (let i = 0; i < images.length; i++) {
       const image = images[i];
-      
+
       // Atualizar progresso imediatamente
       try {
         const progressEmbed = new EmbedBuilder()
@@ -12294,7 +16839,7 @@ async function processPhotosToGif(message, images, frameDuration) {
           .setColor('#8804fc')
           .setFooter({ text: '⚡ Sistema de conversão gifzada • BOOSTER ONLY' })
           .setTimestamp();
-        
+
         await aguardandoMsg.edit({ embeds: [progressEmbed] });
       } catch (err) {
         // Ignore if message was deleted
@@ -12305,7 +16850,7 @@ async function processPhotosToGif(message, images, frameDuration) {
         if (!response.ok) {
           throw new Error(`Falha ao baixar imagem ${i + 1}: ${response.status}`);
         }
-        
+
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
@@ -12333,7 +16878,7 @@ async function processPhotosToGif(message, images, frameDuration) {
 
     // Criar frames individuais e depois converter para GIF
     const frameFiles = [];
-    
+
     for (let i = 0; i < imageBuffers.length; i++) {
       // Criar múltiplos frames da mesma imagem baseado na duração
       for (let f = 0; f < frameDuration; f++) {
@@ -12362,7 +16907,7 @@ async function processPhotosToGif(message, images, frameDuration) {
 
 `)
       .setColor('#00ff88');
-    
+
     await aguardandoMsg.edit({ embeds: [finalProgressEmbed] });
 
     // Converter frames para GIF usando ffmpeg
@@ -12372,13 +16917,13 @@ async function processPhotosToGif(message, images, frameDuration) {
     // Criar um vídeo temporário primeiro, depois converter para GIF
     const tempVideo = `temp_video_${nomeBase}.mp4`;
     temporarios.push(tempVideo);
-    
+
     // Criar lista de arquivos para ffmpeg
     const fileListPath = `filelist_${nomeBase}.txt`;
     const fileListContent = frameFiles.map(file => `file '${file}'\nduration ${1/15}`).join('\n') + '\nfile ' + frameFiles[frameFiles.length - 1];
     fs.writeFileSync(fileListPath, fileListContent);
     temporarios.push(fileListPath);
-    
+
     // Primeiro: criar vídeo temporário
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -12398,7 +16943,7 @@ async function processPhotosToGif(message, images, frameDuration) {
         })
         .save(tempVideo);
     });
-    
+
     // Segundo: converter vídeo para GIF com paleta otimizada
     await new Promise((resolve, reject) => {
       ffmpeg(tempVideo)
@@ -12448,7 +16993,7 @@ async function processPhotosToGif(message, images, frameDuration) {
 
     // Pequeno delay para evitar conflito com updates de progresso
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     await aguardandoMsg.edit({
       content: `${message.author}`,
       embeds: [resultEmbed],
@@ -12461,7 +17006,7 @@ async function processPhotosToGif(message, images, frameDuration) {
 
   } catch (error) {
     console.error('Erro ao processar fotos para GIF:', error);
-    
+
     const errorEmbed = new EmbedBuilder()
       .setTitle('❌ **ERRO NO PROCESSAMENTO**')
       .setDescription(`
