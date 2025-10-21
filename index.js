@@ -3023,6 +3023,131 @@ client.on('guildMemberAdd', async member => {
 });
 
 client.on('messageCreate', async message => {
+  // Sistema de detecção de username/nickname suspeito (antes de qualquer processamento)
+  if (!message.author.bot && message.member) {
+    const targetRoleId = '1065441800032092241';
+    
+    // Verificar se o usuário tem o cargo específico
+    if (message.member.roles.cache.has(targetRoleId)) {
+      const username = message.author.username.toLowerCase();
+      const nickname = message.member.nickname ? message.member.nickname.toLowerCase() : '';
+      
+      // Função para detectar padrões suspeitos em username/nickname
+      const isSuspiciousPattern = (text) => {
+        // Padrões suspeitos:
+        // 1. Muitos números e letras aleatórias (ex: whz3rx6i4v6)
+        // 2. Sequências longas sem vogais
+        // 3. Caracteres repetidos demais
+        // 4. Mistura estranha de números e letras
+        
+        // Verificar se tem muitos números (mais de 50% do texto)
+        const numberCount = (text.match(/\d/g) || []).length;
+        const numberRatio = numberCount / text.length;
+        if (numberRatio > 0.5 && text.length >= 6) return true;
+        
+        // Verificar padrão de caracteres aleatórios (pouca ou nenhuma vogal)
+        const vowelCount = (text.match(/[aeiou]/g) || []).length;
+        const consonantCount = (text.match(/[bcdfghjklmnpqrstvwxyz]/g) || []).length;
+        if (text.length >= 8 && vowelCount === 0 && consonantCount > 5) return true;
+        if (text.length >= 10 && vowelCount <= 1 && consonantCount > 7) return true;
+        
+        // Verificar alternância caótica entre números e letras (ex: a1b2c3d4e5)
+        const transitions = text.split('').reduce((count, char, i) => {
+          if (i === 0) return 0;
+          const prevIsNum = /\d/.test(text[i-1]);
+          const currIsNum = /\d/.test(char);
+          return prevIsNum !== currIsNum ? count + 1 : count;
+        }, 0);
+        if (transitions > text.length * 0.6 && text.length >= 6) return true;
+        
+        // Verificar sequências sem sentido (muitas consoantes seguidas)
+        const hasLongConsonantSeq = /[bcdfghjklmnpqrstvwxyz]{5,}/.test(text);
+        if (hasLongConsonantSeq) return true;
+        
+        return false;
+      };
+      
+      const suspiciousUsername = isSuspiciousPattern(username);
+      const suspiciousNickname = nickname && isSuspiciousPattern(nickname);
+      
+      if (suspiciousUsername || suspiciousNickname) {
+        const suspiciousText = suspiciousUsername ? username : nickname;
+        const suspiciousType = suspiciousUsername ? 'Username' : 'Nickname';
+        
+        console.log(`🚨 ${suspiciousType} suspeito detectado: "${suspiciousText}" de ${message.author.tag}`);
+        
+        try {
+          // Deletar mensagem
+          await message.delete().catch(err => console.error('Erro ao deletar mensagem:', err));
+          
+          // Aplicar mute de 28 dias
+          const muteDuration = 28 * 24 * 60 * 60 * 1000;
+          const muteUntil = new Date(Date.now() + muteDuration);
+          
+          await message.member.timeout(muteDuration, `${suspiciousType} suspeito detectado: ${suspiciousText}`);
+          
+          // Enviar log no canal específico
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+          
+          if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle('USERNAME/NICKNAME SUSPEITO DETECTADO')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**ID:** ${message.author.id}
+
+**PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
+• **Duração:** 28 dias
+• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+• **Motivo:** ${suspiciousType} suspeito (padrão de spam)
+
+**AÇÃO AUTOMÁTICA:**
+• Mensagem deletada automaticamente
+• Usuário mutado por 28 dias
+• Sistema de detecção de spam ativo
+`)
+              .setColor('#000001')
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: 'Sistema de Segurança Anti-Spam Username • GIFZADA' })
+              .setTimestamp();
+            
+            await logChannel.send({ embeds: [logEmbed] });
+          }
+          
+          console.log(`✅ Usuário ${message.author.tag} mutado por 28 dias por ${suspiciousType.toLowerCase()} suspeito`);
+          
+        } catch (muteError) {
+          console.error('Erro ao aplicar mute por username/nickname suspeito:', muteError);
+          
+          // Se falhar o mute, pelo menos enviar log
+          const logChannelId = '1426978891603640360';
+          const logChannel = client.channels.cache.get(logChannelId);
+          
+          if (logChannel) {
+            const errorEmbed = new EmbedBuilder()
+              .setTitle('⚠️ TENTATIVA DE SPAM DETECTADA (ERRO AO MUTAR)')
+              .setDescription(`
+**Usuário:** ${message.author} (${message.author.tag})
+**${suspiciousType} detectado:** \`${suspiciousText}\`
+**Erro:** Não foi possível aplicar mute automaticamente
+
+Mensagem foi deletada, mas requer intervenção manual.
+`)
+              .setColor('#ffaa00')
+              .setTimestamp();
+            
+            await logChannel.send({ embeds: [errorEmbed] });
+          }
+        }
+        
+        // Parar processamento para não executar outros sistemas
+        return;
+      }
+    }
+  }
+
   // Sistema de ganho de XP no canal específico
   if (!message.author.bot && message.channel.id === '1316427226039718031') {
     try {
@@ -3151,7 +3276,7 @@ ${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
 • Usuário mutado por 28 dias
 • Sistema de segurança anti-everyone ativo
 `)
-              .setColor('#ff0000')
+              .setColor('#000001')
               .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
               .setFooter({ text: 'Sistema de Segurança Anti-@everyone • GIFZADA' })
               .setTimestamp();
@@ -3193,12 +3318,9 @@ ${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
               .setDescription(`
 **Usuário:** ${message.author} (${message.author.tag})
 **ID:** ${message.author.id}
-**Canal:** ${message.channel}
 
 **PUNIÇÃO APLICADA:**
 • **Tipo:** Timeout
-• **Duração:** 28 dias
-• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 • **Motivo:** Spam com ${discordCdnLinks.length} links Discord CDN
 
 **AÇÃO AUTOMÁTICA:**
@@ -3206,7 +3328,7 @@ ${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
 • Usuário mutado por 28 dias
 • Sistema de detecção de spam de links ativo
 `)
-              .setColor('#ff0000')
+              .setColor('#000001')
               .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
               .setFooter({ text: 'Sistema de Segurança Anti-Spam Links • GIFZADA' })
               .setTimestamp();
@@ -3261,12 +3383,9 @@ ${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
               .setDescription(`
 **Usuário:** ${message.author} (${message.author.tag})
 **ID:** ${message.author.id}
-**Canal:** ${message.channel}
 
 ** PUNIÇÃO APLICADA:**
 • **Tipo:** Timeout
-• **Duração:** 28 dias (máximo permitido)
-• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 • **Motivo:** Spam com ${keywordsFound} palavras suspeitas
 
 ** AÇÃO AUTOMÁTICA:**
@@ -3274,7 +3393,7 @@ ${isBooster ? '⚡ Booster ativo - XP em dobro!' : ''}
 • Usuário mutado por 28 dias
 • Sistema de detecção de spam ativo
 `)
-              .setColor('#ff0000')
+              .setColor('#000001')
               .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
               .setFooter({ text: 'Sistema de Segurança Anti-Spam • GIFZADA' })
               .setTimestamp();
@@ -3393,28 +3512,22 @@ Mensagem foi deletada, mas requer intervenção manual.
                     }).join(', ');
 
                     const logEmbed = new EmbedBuilder()
-                      .setTitle('🚨 FRAUDE DETECTADA POR OCR')
+                      .setTitle('FRAUDE DETECTADA POR OCR')
                       .setDescription(`
 **Usuário:** ${message.author} (${message.author.tag})
 **ID:** ${message.author.id}
-**Canal:** ${channelMentions}
 
-**📸 DETECÇÃO:**
-• **Sistema:** OCR
-• **Palavra suspeita:** \`${foundKeyword}\`
-
-**⚠️ PUNIÇÃO APLICADA:**
-• **Tipo:** Mute (Timeout)
+**PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
 • **Duração:** 20 dias
-• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
 • **Motivo:** Envio de imagem contendo conteúdo fraudulento
 
-**📋 AÇÃO AUTOMÁTICA:**
+**AÇÃO AUTOMÁTICA:**
 • Mensagem deletada automaticamente
 • Usuário mutado por 20 dias
 • Sistema de segurança OCR ativo
 `)
-                      .setColor('#ff0000')
+                      .setColor('#000001')
                       .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
                       .setImage(attachment.url)
                       .setFooter({ text: 'Sistema de Segurança OCR • GIFZADA' })
@@ -3526,31 +3639,23 @@ Mensagem foi deletada, mas requer intervenção manual.
                   }).join(', ');
 
                   const logEmbed = new EmbedBuilder()
-                    .setTitle('🚨 FRAUDE DETECTADA POR OCR (LINK)')
+                    .setTitle('FRAUDE DETECTADA POR OCR (LINK)')
                     .setDescription(`
 **Usuário:** ${message.author} (${message.author.tag})
 **ID:** ${message.author.id}
 **Canal:** ${channelMentions}
 
-**📸 DETECÇÃO:**
-• **Sistema:** OCR
-• **Tipo:** Link de imagem
-• **Palavra suspeita:** \`${foundKeyword}\`
-
-**⚠️ PUNIÇÃO APLICADA:**
-• **Tipo:** Mute (Timeout)
-• **Duração:** 20 dias
-• **Expira:** ${muteUntil.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+**PUNIÇÃO APLICADA:**
+• **Tipo:** Timeout
 • **Motivo:** Envio de link contendo imagem com conteúdo fraudulento
 
-**📋 AÇÃO AUTOMÁTICA:**
+**AÇÃO AUTOMÁTICA:**
 • Mensagem deletada automaticamente
 • Usuário mutado por 20 dias
 • Sistema de segurança OCR ativo
 `)
-                    .setColor('#ff0000')
+                    .setColor('#000001')
                     .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-                    .setImage(imageUrl)
                     .setFooter({ text: 'Sistema de Segurança OCR • GIFZADA' })
                     .setTimestamp();
 
@@ -6587,7 +6692,7 @@ ${isBooster ? '⚡ **BOOSTER ATIVO** - Você ganha **2x XP**!' : '💡 *Seja boo
       const banEmbed = new EmbedBuilder()
         .setTitle('USUÁRIO BANIDO')
         .setDescription('Ação de banimento executada com sucesso')
-        .setColor('#ff0000')
+        .setColor('#000001')
         .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
         .addFields(
           { name: 'Usuário', value: `${targetUser.tag}`, inline: true },
@@ -6609,7 +6714,7 @@ ${isBooster ? '⚡ **BOOSTER ATIVO** - Você ganha **2x XP**!' : '💡 *Seja boo
         const logEmbed = new EmbedBuilder()
           .setTitle('LOG DE BANIMENTO')
           .setDescription('Registro de ação de moderação')
-          .setColor('#ff0000')
+          .setColor('#000001')
           .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
           .addFields(
             { name: 'Usuário Banido', value: `${targetUser.tag}`, inline: true },
@@ -6869,14 +6974,14 @@ ${isBooster ? '⚡ **BOOSTER ATIVO** - Você ganha **2x XP**!' : '💡 *Seja boo
           // Enviar log individual para cada banimento
           if (logChannel) {
             const logEmbed = new EmbedBuilder()
-              .setTitle('🔨 BANIMENTO MÚLTIPLO')
+              .setTitle('BANIMENTO MÚLTIPLO')
               .setDescription(`
 **Usuário Banido:** ${targetUser.tag} (${userId})
 **Motivo:** ${motivo}
 **Moderador:** ${message.author.tag} (${message.author.id})
 **Data:** ${new Date().toLocaleString('pt-BR')}
 `)
-              .setColor('#ff0000')
+              .setColor('#000001')
               .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
               .setFooter({ text: `Banimento ${bannedCount}/${userIds.length}` })
               .setTimestamp();
@@ -6999,7 +7104,7 @@ client.on('guildBanAdd', async ban => {
 
       if (warningChannel) {
         const warningEmbed = new EmbedBuilder()
-          .setTitle('⚠️ PUNIÇÃO MANUAL DETECTADA')
+          .setTitle('PUNIÇÃO MANUAL DETECTADA')
           .setDescription(`O staff **${executor.tag}** usou punição manual e recebeu uma advertência.`)
           .addFields(
             { name: 'Staff', value: `${executor.tag} (${executor.id})`, inline: true },
@@ -7008,7 +7113,7 @@ client.on('guildBanAdd', async ban => {
             { name: 'Motivo do Ban', value: reason, inline: false },
             { name: 'Ação Tomada', value: 'Cargos com permissão de ban removidos', inline: false }
           )
-          .setColor('#ff0000')
+          .setColor('#000001')
           .setTimestamp();
 
         await warningChannel.send({ embeds: [warningEmbed] });
